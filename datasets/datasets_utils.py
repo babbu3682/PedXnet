@@ -64,4 +64,8 @@ def getItem_DownTask(X, gender=None, target=None, transform=None, training_mode=
     elif training_mode == 'DownTask_Frac':
         if transform is not None:
             X = transform(X)
+        
+    elif training_mode == '3.Ped_Pneumo':
+        if transform is not None:
+            X = transform(X)
         return X, target                             

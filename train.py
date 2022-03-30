@@ -1,9 +1,5 @@
 import os
 import sys
-sys.path.append(os.path.abspath('/workspace/sunggu'))
-sys.path.append(os.path.abspath('/workspace/sunggu/3.Child'))
-sys.path.append(os.path.abspath('/workspace/sunggu/3.Child/modules'))
-sys.path.append(os.path.abspath('/workspace/sunggu/3.Child/utils'))
 
 
 import argparse
@@ -237,9 +233,9 @@ def main(args):
             elif args.training_mode == '2.RSNA_BoneAge':
                 train_stats = train_Downtask_RSNA_BoneAge(model, criterion, data_loader_train, optimizer, device, epoch, args.progressive_transfer)
                 valid_stats = valid_Downtask_RSNA_BoneAge(model, criterion, data_loader_valid, device)
-            elif args.training_mode == '3.Nodule_Detection':
-                train_stats = train_Downtask_Nodule_Detection(model, criterion, data_loader_train, optimizer, device, epoch, args.progressive_transfer)                
-                valid_stats = valid_Downtask_Nodule_Detection(model, criterion, data_loader_valid, device)
+            elif args.training_mode == '3.Ped_Pneumo':
+                train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch, args.progressive_transfer)                
+                valid_stats = valid_Downtask_ped_pneumo(model, criterion, data_loader_valid, device)
             else : 
                 raise Exception('Error...! args.training_mode')    
 
@@ -301,12 +297,12 @@ def main(args):
                 print(f'Best Epoch: {best_epoch:.3f}')     
 
             elif args.model_name == '3.Nodule_Detection':
-                print(f"DICE of the network on the {len(dataset_valid)} valid images: {valid_stats['Dice']:.3f}%")                
-                if valid_stats["Dice"] > best_metric1 :    
-                    best_metric1 = valid_stats["Dice"]
+                print(f"AUC of the network on the {len(dataset_valid)} valid images: {valid_stats['AUC']:.3f}")
+                if valid_stats["AUC"] > best_metric1 :    
+                    best_metric1 = valid_stats["AUC"]
                     best_metric = best_metric1
-                    best_epoch = epoch         
-                print(f'Max Dice: {best_metric:.3f}')    
+                    best_epoch = epoch
+                print(f'Max AUC: {best_metric:.3f}')
                 print(f'Best Epoch: {best_epoch:.3f}')                       
 
             else :

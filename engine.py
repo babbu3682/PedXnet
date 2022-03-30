@@ -860,3 +860,193 @@ def test_Downtask_RSNA_BoneAge(model, criterion, data_loader, device, test_name,
     return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
 
 
+############################ 3. pediatric pneumonia ####################################
+def train_Downtask_ped_pneumo(model, criterion, data_loader, optimizer, device, epoch):
+    # 2d slice-wise based Learning...! 
+    model.train(True)
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch)
+    print_freq = 10
+    
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
+
+        cls_pred = model(inputs, x_lens)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        metric_logger.update(loss=loss_value)
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        
+    # Gather the stats from all processes
+    print("Averaged stats:", metric_logger)
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+# Evaluation code 
+@torch.no_grad()
+def valid_Downtask_ped_pneumo(model, criterion, data_loader, device):
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = 'Valid:'
+    
+    # switch to evaluation mode
+    model.eval()
+    print_freq = 10
+
+    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
+    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
+
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
+
+        with torch.no_grad():
+            cls_pred = model(inputs, x_lens)
+
+        total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
+        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        # LOSS
+        metric_logger.update(loss=loss_value)
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+
+            
+    # Metric CLS
+    AUC = roc_auc_score(total_cls_gt, total_cls_pred)
+    f1  = f1_score(y_true=total_cls_gt, y_pred=total_cls_pred.round())
+    print("F1 score == ",  f1)    
+    confuse_result      = confuse_metric(y_pred=total_cls_pred.round(), y=total_cls_gt) 
+    confusion_matrix, _ = do_metric_reduction(confuse_result, MetricReduction.SUM)
+
+    TP = confusion_matrix[0].item()
+    FP = confusion_matrix[1].item()
+    TN = confusion_matrix[2].item()
+    FN = confusion_matrix[3].item()
+    
+    Acc = (TP+TN) / (TP+FP+TN+FN)
+    Sen = TP / (TP+FN)
+    Spe = TN / (TN+FP)
+
+
+    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
+    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
+
+
+# test code 
+@torch.no_grad()
+def test_Downtask_ped_pneumo(model, criterion, data_loader, device, test_name, save_path):
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = 'TEST:'
+    
+    # switch to evaluation mode
+    model.eval()
+    print_freq = 10
+
+    # Save npz path 
+    save_dict = dict()
+    
+    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
+    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
+
+    img_path_list  = []
+    mask_path_list = []
+    img_list       = []
+    mask_list      = []
+    label_list     = []
+    cls_prob_list  = []
+    feature_list   = []
+    
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        img_path   = batch_data["img_path"][0]        # batch 1. so indexing [0]
+        mask_path  = batch_data["mask_path"][0]       # batch 1. so indexing [0]
+        inputs     = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        seg_gt     = batch_data["label"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt     = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens     = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        # x_lens     = batch_data["z_shape"].to(device) #    ---> (B, 1)
+
+        with torch.no_grad():
+            model.linear1.register_forward_hook(get_features('feat')) # for Representation
+            cls_pred = model(inputs, x_lens)
+            # print("체크 확인용", features['feat'].shape)  #torch.Size([1, 512]) 
+
+            # Save
+            img_path_list.append(img_path)
+            mask_list.append(seg_gt.detach().cpu().numpy())
+            mask_path_list.append(mask_path)
+            img_list.append(inputs.detach().cpu().numpy())
+            label_list.append(cls_gt.detach().cpu().numpy())            
+            cls_prob_list.append(torch.sigmoid(cls_pred).detach().cpu().numpy())
+            feature_list.append(features['feat'].detach().cpu().numpy())
+            
+        total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
+        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        # LOSS
+        metric_logger.update(loss=loss_value)
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+    
+    # Metric CLS
+    AUC = roc_auc_score(total_cls_gt, total_cls_pred)
+    confuse_result      = confuse_metric(y_pred=total_cls_pred.round(), y=total_cls_gt) 
+    confusion_matrix, _ = do_metric_reduction(confuse_result, MetricReduction.SUM)
+    f1  = f1_score(y_true=total_cls_gt, y_pred=total_cls_pred.round())
+    print("F1 score == ",  f1)
+    TP = confusion_matrix[0].item()
+    FP = confusion_matrix[1].item()
+    TN = confusion_matrix[2].item()
+    FN = confusion_matrix[3].item()
+    
+    Acc = (TP+TN) / (TP+FP+TN+FN)
+    Sen = TP / (TP+FN)
+    Spe = TN / (TN+FP)
+
+    # Save Prediction by using npz
+    save_dict['gt_img_path']  = img_path_list
+    save_dict['gt_mask_path'] = mask_path_list
+    save_dict['gt_img']       = img_list
+    save_dict['gt_mask']      = mask_list
+    save_dict['gt_label']     = label_list
+    save_dict['pred_label']   = cls_prob_list
+    save_dict['feature']      = feature_list
+
+    print("Saved npz...! => ", save_path + test_name + '_cls_3d[AUC_' + str(round(AUC, 3)) + '].npz')
+    np.savez(save_path + test_name + '_cls_3d[AUC_' + str(round(AUC, 3)) + '].npz', cls_3d=save_dict) 
+
+    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
+    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
+

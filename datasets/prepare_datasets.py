@@ -2,7 +2,7 @@ from datasets.PedXnet import *
 
 from datasets.General_Fracture import *
 from datasets.RSNA_BoneAge import *
-from datasets.Nodule_Detection import *
+from datasets.Ped_Pneumo import *
 
 
 
@@ -32,9 +32,11 @@ def build_dataset(is_train, args):
     elif args.data_set == '2.RSNA_BoneAge':
         mode='train' if is_train else 'val'
         dataset = RSNA_BoneAge_Dataset(mode=mode)
-    elif args.data_set == '3.Nodule_Detection':
-        mode='train' if is_train else 'val'
-        dataset = Nodule_Detection_Dataset(mode=mode)
+    elif args.data_set == '3.Ped_Pneumo':
+        print('fuck')
+        mode='train' if is_train else 'validation'
+        print(mode)
+        dataset = Ped_Pneumo_Dataset(mode=mode)
 
     return dataset
 
@@ -58,9 +60,9 @@ def build_test_dataset(args):
         mode='train' if is_train else 'val'
         dataset = RSNA_BoneAge_Dataset(mode='test')
 
-    elif args.data_set == '3.Nodule_Detection':
-        mode='train' if is_train else 'val'
-        dataset = Nodule_Detection_Dataset(mode='test')
+    elif args.data_set == '3.Ped_Pneumo':
+        mode='train' if is_train else 'validation'
+        dataset = Ped_Pneumo_Dataset(mode='test')
 
     return dataset
 

@@ -233,8 +233,8 @@ def create_model(stream, name, pretrained):
             model = General_Fracture_Model(pretrained)
         elif name == '2.RSNA BoneAge':
             model = RSNA_BoneAge_Model(pretrained)
-        elif name == '3.Nodule Detection':
-            model = Nodule_Detection_Model(pretrained)                        
+        elif name == '3.Ped_Pneumo':
+            model = resnet50(pretrained)                        
 
 
     else :

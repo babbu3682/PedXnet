@@ -6,32 +6,42 @@ from pydicom import dcmread
 import albumentations as albu
 from PIL import Image
 from datasets.datasets_utils import getItem, getItem_DownTask
+import os
 
 
 def get_label(x):
-    if '/fracture/' in x:
+    if '/Pneumonia/' in x:
         return 1
     else :
         return 0
 
-class Frac_Dataset(BaseDataset):
+class Ped_Pneumo_Dataset(BaseDataset):
     def __init__(self, mode='train', transform=None, num_imgs_per_cat=None, training_mode='SSL'):  
         self.mode = mode
         self.transform = transform
         self.training_mode = training_mode
-
+        self.classes = ['Normal', 'Pneumonia']
+        data_path = '/mnt/nas125_vol2/jeeyoungkim/v2/Pediatric_Pneumonia/dataset/split_2class'
+        
         if self.mode == 'train':
-            self.img_list   = list_sort_nicely(glob.glob('/workspace/sunggu/3.Child/dataset/bone_fracture/train/*/*.npy'))
+            data_path = os.path.join(data_path, self.mode)
+            self.img_list = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
+            self.img_list = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(self.img_list)]    
+            
             self.label_list = list(map(get_label, self.img_list))
 
         else :
-            self.img_list   = list_sort_nicely(glob.glob('/workspace/sunggu/3.Child/dataset/bone_fracture/valid/*/*.npy'))
+            data_path = os.path.join(data_path, self.mode)
+            self.img_list = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
+            self.img_list = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(self.img_list)]    
+            
             self.label_list = list(map(get_label, self.img_list))
 
     def __getitem__(self, i):
         
         # Read Image
-        image  = np.load(self.img_list[i]).squeeze() # shape (1, H, W)
+        image  = cv2.imread(self.img_list[i]) # shape (1, H, W)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         target = np.array(self.label_list[i])
         
         # print("Check!", image.shape, image.dtype, image.max(), image.min())    
