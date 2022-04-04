@@ -7,6 +7,7 @@ import albumentations as albu
 from PIL import Image
 from datasets.datasets_utils import getItem, getItem_DownTask
 import os
+import cv2
 
 
 def get_label(x):
@@ -25,18 +26,27 @@ class Ped_Pneumo_Dataset(BaseDataset):
         
         if self.mode == 'train':
             data_path = os.path.join(data_path, self.mode)
-            self.img_list = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
-            self.img_list = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(self.img_list)]    
+            tmp = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
+            tmp = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(tmp)]    
+            
+            self.img_list = []
+            for i in tmp:
+                for j in i:
+                    self.img_list.append(j)
             
             self.label_list = list(map(get_label, self.img_list))
 
         else :
             data_path = os.path.join(data_path, self.mode)
-            self.img_list = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
-            self.img_list = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(self.img_list)]    
+            tmp = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
+            tmp = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(tmp)]    
+            self.img_list = []
+            for i in tmp:
+                for j in i:
+                    self.img_list.append(j)
             
             self.label_list = list(map(get_label, self.img_list))
-
+            
     def __getitem__(self, i):
         
         # Read Image
@@ -49,7 +59,7 @@ class Ped_Pneumo_Dataset(BaseDataset):
             image = image[..., 0]        
 
         # 전처리 1)
-        image = np.clip(image, a_min=np.percentile(image, 0.5), a_max=np.percentile(image, 99.5))
+        image = np.clip(image, a_min=np.percentile(image, 0.5), a_max=np.percentile(image, 99.5), dtype=np.float32)
 
         # 전처리 3)
         image = albu.PadIfNeeded(min_height=max(image.shape), min_width=max(image.shape), always_apply=True, border_mode=0)(image=image)['image']
@@ -64,7 +74,7 @@ class Ped_Pneumo_Dataset(BaseDataset):
 
         X = Image.fromarray(image)
 
-        return getItem_DownTask(X=X, target=target, transform=self.transform, training_mode=self.training_mode)
+        return getItem_DownTask(X=X, target=target, transform=self.transform, data_set='3.Ped_Pneumo')
         
     def __len__(self):
         return len(self.img_list)

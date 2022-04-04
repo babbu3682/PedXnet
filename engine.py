@@ -871,12 +871,12 @@ def train_Downtask_ped_pneumo(model, criterion, data_loader, optimizer, device, 
     
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        inputs  = batch_data[0].to(device).type(torch.cuda.FloatTensor)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data[1].float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens  = batch_data[0].shape[0]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
         # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
 
-        cls_pred = model(inputs, x_lens)
+        cls_pred = model(inputs)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()

@@ -29,13 +29,13 @@ def build_dataset(is_train, args):
     # Downstream
     elif args.data_set == '1.General_Fracture':
         dataset = General_Fracture_Dataset(mode=mode)  
+    
     elif args.data_set == '2.RSNA_BoneAge':
         mode='train' if is_train else 'val'
         dataset = RSNA_BoneAge_Dataset(mode=mode)
+        
     elif args.data_set == '3.Ped_Pneumo':
-        print('fuck')
         mode='train' if is_train else 'validation'
-        print(mode)
         dataset = Ped_Pneumo_Dataset(mode=mode)
 
     return dataset

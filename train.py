@@ -123,7 +123,8 @@ random.seed(random_seed)
 #     return torch.utils.data.dataloader.default_collate(batch)
 
 def default_collate_fn(batch):
-    batch = list(filter(lambda x: torch.isnan(x['image'].max()).item() == False, batch))
+    #batch = list(filter(lambda x: torch.isnan(x['image'].max()).item() == False, batch))
+    
     return torch.utils.data.dataloader.default_collate(batch)
 
 
@@ -157,6 +158,7 @@ def main(args):
     dataset_valid = build_dataset(is_train=False, args=args)
     
     data_loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True,  pin_memory=args.pin_mem, drop_last=True,  collate_fn=default_collate_fn)
+    
     # data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=1,               num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False)#, collate_fn=default_collate_fn)
     data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=default_collate_fn)
 
@@ -164,7 +166,7 @@ def main(args):
     if args.training_stream == 'Upstream':
         criterion = Uptask_Loss(mode=args.training_mode, model_name=args.model_name)
     elif args.training_stream == 'Downstream':
-        criterion = Downtask_Loss(mode=args.training_mode, model_name=args.model_name)
+        criterion = Downtask_Loss(mode=args.training_mode, task_name=args.model_name)
     else: 
         raise Exception('Error...! args.training_stream')
 
@@ -227,14 +229,14 @@ def main(args):
                 raise Exception('Error...! args.training_mode')    
 
         elif args.training_stream == 'Downstream':
-            if args.training_mode == '1.General_Fracture':
+            if args.data_set == '1.General_Fracture':
                 train_stats = train_Downtask_General_Fracture(model, criterion, data_loader_train, optimizer, device, epoch)
                 valid_stats = valid_Downtask_General_Fracture(model, criterion, data_loader_valid, device)
-            elif args.training_mode == '2.RSNA_BoneAge':
+            elif args.data_set == '2.RSNA_BoneAge':
                 train_stats = train_Downtask_RSNA_BoneAge(model, criterion, data_loader_train, optimizer, device, epoch, args.progressive_transfer)
                 valid_stats = valid_Downtask_RSNA_BoneAge(model, criterion, data_loader_valid, device)
-            elif args.training_mode == '3.Ped_Pneumo':
-                train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch, args.progressive_transfer)                
+            elif args.data_set == '3.Ped_Pneumo':
+                train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch)                
                 valid_stats = valid_Downtask_ped_pneumo(model, criterion, data_loader_valid, device)
             else : 
                 raise Exception('Error...! args.training_mode')    

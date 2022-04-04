@@ -50,17 +50,27 @@ class Uptask_Loss(torch.nn.Module):
 
 
 class Downtask_Loss(torch.nn.Module):
-    def __init__(self, mode='1.General_Fracture'):
+    def __init__(self, mode, task_name):
         super().__init__()
         self.mode      = mode
-        
-        self.BCE_loss  = torch.nn.BCEWithLogitsLoss()
+        self.task_name = task_name
+        self.BCE_loss  = torch.nn.BCEWithLogitsLoss() # Sigmoid
         self.Loss_1_W  = 1.0
 
     def forward(self, cls_pred=None, cls_gt=None):
         if self.mode == 'Supervised':
-            Loss_1 = self.BCE_loss(cls_pred, cls_gt)
-            return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+            
+            if self.task_name=='1.General_Fracture':
+                Loss_1 = self.BCE_loss(cls_pred, cls_gt)
+                return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+            
+            elif self.task_name=='2.RSNA_BoneAge':
+                Loss_1 = self.BCE_loss(cls_pred, cls_gt)
+                return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+            
+            elif self.task_name=='3.Ped_Pneumo':
+                Loss_1 = self.BCE_loss(cls_pred, cls_gt)
+                return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
         
         elif self.mode == 'Unsupervised':
             Loss_1 = self.BCE_loss(cls_pred, cls_gt)

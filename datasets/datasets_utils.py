@@ -1,4 +1,5 @@
 from PIL import Image
+import torchvision.transforms as transforms
 import numpy as np
 
 def RandomRotation(X, orientation=None):
@@ -45,27 +46,28 @@ def getItem(X, target = None, transform=None, training_mode = 'SSL'):
     return X1, rot1, X2, rot2
 
 
-def getItem_DownTask(X, gender=None, target=None, transform=None, training_mode=None):
-    if training_mode == 'DownTask_RSNA':
+def getItem_DownTask(X, gender=None, target=None, transform=None, data_set=None):
+    if data_set == 'DownTask_RSNA':
         if transform is not None:
             X = transform(X)
         return X, gender, target
 
-    elif training_mode == 'DownTask_NIH':
+    elif data_set == 'DownTask_NIH':
         if transform is not None:
             X = transform(X)
         return X, target    
 
-    elif training_mode == 'DownTask_Disease_16':
+    elif data_set == 'DownTask_Disease_16':
         if transform is not None:
             X = transform(X)
         return X, target   
 
-    elif training_mode == 'DownTask_Frac':
+    elif data_set == 'DownTask_Frac':
         if transform is not None:
             X = transform(X)
         
-    elif training_mode == '3.Ped_Pneumo':
+    elif data_set == '3.Ped_Pneumo':
         if transform is not None:
             X = transform(X)
+        X = transforms.PILToTensor()(X)
         return X, target                             
