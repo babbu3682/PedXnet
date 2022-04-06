@@ -298,7 +298,7 @@ def main(args):
                 print(f'Max Dice: {best_metric:.3f}')    
                 print(f'Best Epoch: {best_epoch:.3f}')     
 
-            elif args.model_name == '3.Nodule_Detection':
+            elif args.model_name == '3.Ped_Pneumo':
                 print(f"AUC of the network on the {len(dataset_valid)} valid images: {valid_stats['AUC']:.3f}")
                 if valid_stats["AUC"] > best_metric1 :    
                     best_metric1 = valid_stats["AUC"]

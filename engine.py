@@ -10,10 +10,11 @@ import cv2
 import os
 import sys
 import matplotlib.pyplot as plt
-
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import f1_score
 import monai
 # sys.path.append(os.path.abspath('/workspace/sunggu/MONAI'))
-# from monai.metrics.utils import MetricReduction, do_metric_reduction
+from monai.metrics.utils import MetricReduction, do_metric_reduction
 from monai.metrics import compute_roc_auc, ConfusionMatrixMetric   
 from monai.transforms import AsDiscrete, Activations
 from torch.cuda.amp import autocast
@@ -913,13 +914,13 @@ def valid_Downtask_ped_pneumo(model, criterion, data_loader, device):
 
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        inputs  = batch_data[0].to(device).type(torch.cuda.FloatTensor)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data[1].float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens  = batch_data[0].shape[0]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
         # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
 
         with torch.no_grad():
-            cls_pred = model(inputs, x_lens)
+            cls_pred = model(inputs)
 
         total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
         total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
