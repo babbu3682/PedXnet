@@ -165,6 +165,9 @@ def main(args):
     # Select Loss
     if args.training_stream == 'Upstream':
         criterion = Uptask_Loss(mode=args.training_mode, model_name=args.model_name)
+    '''
+    Check Here
+    '''
     elif args.training_stream == 'Downstream':
         criterion = Downtask_Loss(mode=args.training_mode, task_name=args.model_name)
     else: 
@@ -238,6 +241,12 @@ def main(args):
             elif args.data_set == '3.Ped_Pneumo':
                 train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch)                
                 valid_stats = valid_Downtask_ped_pneumo(model, criterion, data_loader_valid, device)
+            '''
+            Check Here
+            '''
+            elif args.data_set == '4.Body_16':
+                train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch)                
+                valid_stats = valid_Downtask_ped_pneumo(model, criterion, data_loader_valid, device)
             else : 
                 raise Exception('Error...! args.training_mode')    
 
@@ -305,7 +314,20 @@ def main(args):
                     best_metric = best_metric1
                     best_epoch = epoch
                 print(f'Max AUC: {best_metric:.3f}')
-                print(f'Best Epoch: {best_epoch:.3f}')                       
+                print(f'Best Epoch: {best_epoch:.3f}')  
+               
+            '''
+            Check Here
+            '''
+            elif args.model_nae == '4.Body_16':
+                print(f"AUC of the network on the {len(dataset_valid)} valid images: {valid_stats['AUC']:.3f}")
+                if valid_stats["AUC"] > best_metric1 :    
+                    best_metric1 = valid_stats["AUC"]
+                    best_metric = best_metric1
+                    best_epoch = epoch
+                print(f'Max AUC: {best_metric:.3f}')
+                print(f'Best Epoch: {best_epoch:.3f}')  
+                
 
             else :
                 raise Exception('Error...! args.training_mode')  
