@@ -1052,7 +1052,15 @@ def test_Downtask_ped_pneumo(model, criterion, data_loader, device, test_name, s
     return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
 
 ############################ 4. Body 16 class ####################################
+'''
+jypark:
+이거 일단 CE 기반 (BCE 아님!!! 제발 아님!!)
+multi class classifier 학습한다 가정하고 짬.
+근데 데이터셋 확정 안되서 아직은 수정 필요.
 
+test 안 짰다... 말했다...
+
+'''
 def train_Downtask_Body_16(model, criterion, data_loader, optimizer, device, epoch):
     # 2d slice-wise based Learning...! 
     model.train(True)

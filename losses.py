@@ -55,6 +55,10 @@ class Downtask_Loss(torch.nn.Module):
         self.mode      = mode
         self.task_name = task_name
         self.BCE_loss  = torch.nn.BCEWithLogitsLoss() # Sigmoid
+        '''
+        jypark: nn.CrossEntropyLoss == softmax + cross-entropy
+        '''
+        self.CE_loss = torch.nn.CrossEntropyLoss()  # 이거 regression으로 할거면 빼고 딴거 써야함.
         self.Loss_1_W  = 1.0
 
     def forward(self, cls_pred=None, cls_gt=None):
@@ -71,6 +75,11 @@ class Downtask_Loss(torch.nn.Module):
             elif self.task_name=='3.Ped_Pneumo':
                 Loss_1 = self.BCE_loss(cls_pred, cls_gt)
                 return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+            elif self.task_name=='4.Body_16':
+                Loss_1 = self.CE_Loss(cls_pred, cls_gt)
+                return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+                
+            
         
         elif self.mode == 'Unsupervised':
             Loss_1 = self.BCE_loss(cls_pred, cls_gt)

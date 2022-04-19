@@ -139,14 +139,22 @@ class Bottleneck(nn.Module):
 
         return out
 
-
+'''
+jypark:
+여기봐야돼!!!!!!!!!
+제발봐!!!!!!!!!
+regression이야 뭐야
+regression -> num_classes = 1
+multiclassification -> num_classes =16
+일단은 후자인 걸로.
+'''
 class ResNet(nn.Module):
 
     def __init__(
         self,
         block: Type[Union[BasicBlock, Bottleneck]],
         layers: List[int],
-        num_classes: int = 1,
+        num_classes: int = 16,
         zero_init_residual: bool = False,
         groups: int = 1,
         width_per_group: int = 64,

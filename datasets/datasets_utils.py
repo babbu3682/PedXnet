@@ -70,4 +70,13 @@ def getItem_DownTask(X, gender=None, target=None, transform=None, data_set=None)
         if transform is not None:
             X = transform(X)
         X = transforms.PILToTensor()(X)
+    elif dataset == '4.Body_16':
+        if transform is not None:
+            X = transform(X)
+            '''
+            jypark:
+        # 이거 아직 데이터 포멧이 어떨지 몰라서 datasets/boay_16.py애서 세팅 확정나면 다시 볼것.
+        # datasets/body_16.py에도 클래스 시작전에 주석으로 언급함.
+        '''
+        X = transforms.PILToTensor()(X)
         return X, target                             

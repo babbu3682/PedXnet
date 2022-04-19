@@ -154,6 +154,11 @@ def main(args):
     device = torch.device(args.device)
 
     print("Loading dataset ....")
+    
+    '''
+    jypark: collate_fn 체크
+    '''
+    
     dataset_train = build_dataset(is_train=True,  args=args)   
     dataset_valid = build_dataset(is_train=False, args=args)
     
@@ -166,7 +171,7 @@ def main(args):
     if args.training_stream == 'Upstream':
         criterion = Uptask_Loss(mode=args.training_mode, model_name=args.model_name)
     '''
-    Check Here
+    jypark: 체크
     '''
     elif args.training_stream == 'Downstream':
         criterion = Downtask_Loss(mode=args.training_mode, task_name=args.model_name)
@@ -241,12 +246,10 @@ def main(args):
             elif args.data_set == '3.Ped_Pneumo':
                 train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch)                
                 valid_stats = valid_Downtask_ped_pneumo(model, criterion, data_loader_valid, device)
-            '''
-            Check Here
-            '''
+            
             elif args.data_set == '4.Body_16':
-                train_stats = train_Downtask_ped_pneumo(model, criterion, data_loader_train, optimizer, device, epoch)                
-                valid_stats = valid_Downtask_ped_pneumo(model, criterion, data_loader_valid, device)
+                train_stats = train_Downtask_Body_16(model, criterion, data_loader_train, optimizer, device, epoch)                
+                valid_stats = valid_Downtask_Body_16(model, criterion, data_loader_valid, device)
             else : 
                 raise Exception('Error...! args.training_mode')    
 
@@ -320,6 +323,15 @@ def main(args):
             Check Here
             '''
             elif args.model_nae == '4.Body_16':
+                # 이거 AUC 어케 볼건디;
+                '''
+                
+                jypark: 16 class summary 방식 확정 필요함!!!
+                
+                
+                
+                
+                '''
                 print(f"AUC of the network on the {len(dataset_valid)} valid images: {valid_stats['AUC']:.3f}")
                 if valid_stats["AUC"] > best_metric1 :    
                     best_metric1 = valid_stats["AUC"]
