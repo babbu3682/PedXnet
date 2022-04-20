@@ -19,19 +19,37 @@ class Frac_Dataset(BaseDataset):
         self.mode = mode
         self.transform = transform
         self.training_mode = training_mode
-
+        self.classes = ['Non-Fracture', 'Fracture']
+        data_path = 'add_your_data_path'
+        
         if self.mode == 'train':
-            self.img_list   = list_sort_nicely(glob.glob('/workspace/sunggu/3.Child/dataset/bone_fracture/train/*/*.npy'))
+            data_path = os.path.join(data_path, self.mode)
+            tmp = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
+            tmp = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(tmp)]    
+            
+            self.img_list = []
+            for i in tmp:
+                for j in i:
+                    self.img_list.append(j)
+            
             self.label_list = list(map(get_label, self.img_list))
 
         else :
-            self.img_list   = list_sort_nicely(glob.glob('/workspace/sunggu/3.Child/dataset/bone_fracture/valid/*/*.npy'))
+            data_path = os.path.join(data_path, self.mode)
+            tmp = [os.listdir(os.path.join(data_path, i)) for i in self.classes]
+            tmp = [[os.path.join(data_path, self.classes[idx], j) for j in i] for idx, i in enumerate(tmp)]    
+            self.img_list = []
+            for i in tmp:
+                for j in i:
+                    self.img_list.append(j)
+            
             self.label_list = list(map(get_label, self.img_list))
-
+            
     def __getitem__(self, i):
         
         # Read Image
-        image  = np.load(self.img_list[i]).squeeze() # shape (1, H, W)
+        image  = cv2.imread(self.img_list[i]) # shape (1, H, W)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         target = np.array(self.label_list[i])
         
         # print("Check!", image.shape, image.dtype, image.max(), image.min())    
@@ -39,7 +57,7 @@ class Frac_Dataset(BaseDataset):
             image = image[..., 0]        
 
         # 전처리 1)
-        image = np.clip(image, a_min=np.percentile(image, 0.5), a_max=np.percentile(image, 99.5))
+        image = np.clip(image, a_min=np.percentile(image, 0.5), a_max=np.percentile(image, 99.5), dtype=np.float32)
 
         # 전처리 3)
         image = albu.PadIfNeeded(min_height=max(image.shape), min_width=max(image.shape), always_apply=True, border_mode=0)(image=image)['image']
@@ -54,7 +72,7 @@ class Frac_Dataset(BaseDataset):
 
         X = Image.fromarray(image)
 
-        return getItem_DownTask(X=X, target=target, transform=self.transform, training_mode=self.training_mode)
+        return getItem_DownTask(X=X, target=target, transform=self.transform, data_set='3.Ped_Pneumo')
         
     def __len__(self):
         return len(self.img_list)

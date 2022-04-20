@@ -490,12 +490,12 @@ def train_Downtask_General_Frac(model, criterion, data_loader, optimizer, device
     
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        inputs  = batch_data[0].to(device).type(torch.cuda.FloatTensor)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data[1].float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens  = batch_data[0].shape[0]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
         # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
 
-        cls_pred = model(inputs, x_lens)
+        cls_pred = model(inputs)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
@@ -532,13 +532,13 @@ def valid_Downtask_General_Frac(model, criterion, data_loader, device):
 
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
+        inputs  = batch_data[0].to(device).type(torch.cuda.FloatTensor)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data[1].float().unsqueeze(1).to(device) #    ---> (B, 1)
+        x_lens  = batch_data[0].shape[0]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
         # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
 
         with torch.no_grad():
-            cls_pred = model(inputs, x_lens)
+            cls_pred = model(inputs)
 
         total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
         total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
@@ -575,6 +575,7 @@ def valid_Downtask_General_Frac(model, criterion, data_loader, device):
     print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
     # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
+
 
 
 # test code 

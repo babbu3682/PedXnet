@@ -230,7 +230,7 @@ def create_model(stream, name, pretrained):
 
     elif stream == 'Downstream':
         if name == '1.General Fracture':
-            model = General_Fracture_Model(pretrained)
+            model = resnet50(pretrained)
         elif name == '2.RSNA BoneAge':
             model = RSNA_BoneAge_Model(pretrained)
         elif name == '3.Ped_Pneumo':
