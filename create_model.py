@@ -234,7 +234,10 @@ def create_model(stream, name, pretrained):
         elif name == '2.RSNA BoneAge':
             model = RSNA_BoneAge_Model(pretrained)
         elif name == '3.Ped_Pneumo':
-            model = resnet50(pretrained)                        
+            model = resnet50(pretrained) 
+            path = '/mnt/nas100/sunggu/3.Child/models/[Uptask][Unsup]ResNet_AutoEncoder_DataParallel/epoch_88_checkpoint.pth'
+            state_dict = torch.load(path)
+            model.load_state_dict(state_dict['model_state_dict'])
 
 
     else :

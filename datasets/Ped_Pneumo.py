@@ -22,7 +22,7 @@ class Ped_Pneumo_Dataset(BaseDataset):
         self.transform = transform
         self.training_mode = training_mode
         self.classes = ['Normal', 'Pneumonia']
-        data_path = '/mnt/nas125_vol2/jeeyoungkim/v2/Pediatric_Pneumonia/dataset/split_2class'
+        data_path = '/mnt/nas125_vol2/jeeyoungkim/v2/Pediatric_Pneumonia/dataset/original_2class'
         
         if self.mode == 'train':
             data_path = os.path.join(data_path, self.mode)
