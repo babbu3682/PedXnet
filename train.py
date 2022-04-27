@@ -19,19 +19,6 @@ from lr_schedulers import create_scheduler
 
 
 
-
-def lambda_rule(epoch, warm_up_epoch, start_decay_epoch, total_epoch, min_lr):
-    # Linear WarmUP
-    if (epoch < warm_up_epoch):
-        return max(0, epoch / warm_up_epoch)
-    else :
-        lr = 1.0 - max(0, epoch - start_decay_epoch) /(float(total_epoch) - start_decay_epoch)
-
-        if lr <= min_lr:
-            lr = min_lr
-
-    return lr
-
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
         return True
