@@ -51,8 +51,10 @@ def get_pixels_hu(path):
     return np.array(image, dtype=np.int16)
 
 def dicom_normalize(image): 
-    image -= image.min()
-    image /= image.max() 
+    if len(np.unique(image)) != 1:  # Sometimes it cause the nan inputs...
+        image -= image.min()
+        image /= image.max() 
+
     return image.astype('float32')
 
 def dicom_resize_and_padding_with_aspect(image, spatial_size):
@@ -64,9 +66,14 @@ def dicom_resize_and_padding_with_aspect(image, spatial_size):
 def add_img_path(x):
     return '/workspace/sunggu/3.Child/PedXnet_Code_Factory/goto_chest' + x
 
-def minmax_normalize(image):
-    image -= image.min()
-    image /= image.max() 
+def minmax_normalize(image, option=False):
+    if len(np.unique(image)) != 1:  # Sometimes it cause the nan inputs...
+        image -= image.min()
+        image /= image.max() 
+
+    if option:
+        image = (image - 0.5) / 0.5  # Range -1.0 ~ 1.0   @ We do not use -1~1 range becuase there is no Tanh act.
+
     return image.astype('float32')
 
 def Old_PedXNet_Dataset(mode, num_class, patch_training=False):       
@@ -241,8 +248,8 @@ def New_PedXNet_Dataset(mode):
             RandRotated(keys=["image"], prob=0.1, range_x=np.pi/4, range_y=np.pi/4, range_z=0.0, keep_size=True, align_corners=False, allow_missing_keys=False),
             RandZoomd(keys=["image"], prob=0.1, min_zoom=0.5, max_zoom=2.0, align_corners=None, keep_size=True, allow_missing_keys=False),
             
-            # Data Normalize
-            Lambdad(keys=["image"], func=minmax_normalize),                    
+            # Normalize
+            Lambdad(keys=["image"], func=functools.partial(minmax_normalize, option=False)),                  
             ToTensord(keys=["image"]),
         ]
     )     

@@ -88,6 +88,8 @@ def get_args_parser():
     # DataParrel or Single GPU train
     parser.add_argument('--multi-gpu-mode', default='DataParallel', choices=['DataParallel', 'Single'], type=str, help='multi-gpu-mode')          
     parser.add_argument('--device',         default='cuda', help='device to use for training / testing')
+    parser.add_argument('--cuda-device-order', default='PCI_BUS_ID', type=str, help='cuda_device_order')
+    parser.add_argument('--cuda-visible-devices', default='0', type=str, help='cuda_visible_devices')
 
     # Continue Training
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N', help='start epoch')    
@@ -177,6 +179,7 @@ def main(args):
     model = create_model(stream=args.training_stream, name=args.model_name, pretrained=args.pretrained_weight)  # linear protocol이랑 pretrained_weight 넣기
     print(model)
 
+
     # Optimizer & lr schedule
     optimizer    = torch.optim.AdamW(params=model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
     lr_scheduler = create_scheduler(name=args.lr_scheduler, optimizer=optimizer, args=args)
@@ -188,6 +191,11 @@ def main(args):
         model.load_state_dict(checkpoint['model_state_dict'])        
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])        
+        # optimizer Error fix...!
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.cuda()
 
         if not args.from_pretrained: # if you want finetuning, Commenting below lines
             args.start_epoch = checkpoint['epoch'] + 1  
@@ -201,7 +209,6 @@ def main(args):
         model.to(device)
     else :
         raise Exception('Error...! args.multi_gpu_mode')    
-
 
     #### Etc training setting
     output_dir = Path(args.output_dir)
@@ -349,5 +356,5 @@ if __name__ == '__main__':
 
     if args.output_dir:
         os.makedirs(args.output_dir, mode=0o777, exist_ok=True)
-        
+
     main(args)
