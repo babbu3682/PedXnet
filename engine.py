@@ -1,22 +1,26 @@
+import os
 import math
-from pathlib import Path
-from typing import Iterable, Optional
 import utils
 import torch
 import torch.nn.functional as F
 import torchvision
 import numpy as np
 import cv2
-import os
-import sys
 import matplotlib.pyplot as plt
 
-import monai
-# sys.path.append(os.path.abspath('/workspace/sunggu/MONAI'))
-# from monai.metrics.utils import MetricReduction, do_metric_reduction
-from monai.metrics import compute_roc_auc, ConfusionMatrixMetric   
-from monai.transforms import AsDiscrete, Activations
-from torch.cuda.amp import autocast
+from metrics import *
+
+
+
+def freeze_params(model: torch.nn.Module):
+    """Set requires_grad=False for each of model.parameters()"""
+    for par in model.parameters():
+        par.requires_grad = False
+
+def unfreeze_params(model: torch.nn.Module):
+    """Set requires_grad=True for each of model.parameters()"""
+    for par in model.parameters():
+        par.requires_grad = True
 
 fn_tonumpy = lambda x: x.cpu().detach().numpy().transpose(0, 2, 3, 1)
 
@@ -41,17 +45,12 @@ def Activation_Map(x):
     # print("mean shape2 == ", mean.shape) # (32, 512, 512)
     return mean
 
-# Metric
-confuse_metric = ConfusionMatrixMetric(metric_name=['f1 score', 'accuracy', 'sensitivity', 'specificity'])  # input, target must be one-hot format
 
-# Post-processing
-Pred_To_Prob   = Activations(sigmoid=False, softmax=True, other=None)
-
-######################################################                    Uptask Task                         ########################################################
-############################ Supervised ####################################
-def train_Uptask_Sup(model, criterion, data_loader, optimizer, device, epoch, print_freq):
+# Uptask Task
+    # Supervised 
+def train_Uptask_Sup(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size):
     model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     
@@ -62,16 +61,13 @@ def train_Uptask_Sup(model, criterion, data_loader, optimizer, device, epoch, pr
         
         cls_pred = model(inputs)
         
-        if isinstance(cls_pred, (list, tuple)):
-            loss, loss_detail = criterion(cls_pred=cls_pred[0], cls_aux=cls_pred[1], cls_gt=cls_gt)
-
-        else: 
-            loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-
+        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
+            print("image == ", batch_data['image_meta_dict']['filename_or_obj'])
+            print("label == ", batch_data['label_meta_dict']['filename_or_obj'])
 
         optimizer.zero_grad()
         loss.backward()
@@ -82,33 +78,20 @@ def train_Uptask_Sup(model, criterion, data_loader, optimizer, device, epoch, pr
             metric_logger.update(**loss_detail)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         
-    # Gather the stats from all processes
-    print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
 
-# Evaluation code 
 @torch.no_grad()
-def valid_Uptask_Sup(model, criterion, data_loader, device, num_class, print_freq):
-    metric_logger = utils.MetricLogger(delimiter="  ")
+def valid_Uptask_Sup(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'Valid:'
 
-    # Post-processing define
-    Pred_To_Onehot  = AsDiscrete(argmax=True,  to_onehot=True, num_classes=num_class, threshold_values=False, logit_thresh=0.5, rounding=None, n_classes=None)
-    Label_To_Onehot = AsDiscrete(argmax=False, to_onehot=True, num_classes=num_class, threshold_values=False, logit_thresh=0.5, rounding=None, n_classes=None)
-
-    # switch to evaluation mode
-    model.eval()
-    
-    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
-    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
-
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
         inputs  = batch_data["image"].to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
         cls_gt  = batch_data["label"].to(device)   # (B, 1)
 
-        with torch.no_grad():
-            cls_pred = model(inputs)
+        cls_pred = model(inputs)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
@@ -121,52 +104,35 @@ def valid_Uptask_Sup(model, criterion, data_loader, device, num_class, print_fre
         if loss_detail is not None:
             metric_logger.update(**loss_detail)
 
-        total_cls_pred  = torch.cat([total_cls_pred,  cls_pred],   dim=0)
-        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt],     dim=0)
+        # Metric CLS
+        auc            = auc_metric(y_pred=Softmax_To_Prob(cls_pred), y=Label_To_16_Onehot(cls_gt))
+        confuse_matrix = confuse_metric(y_pred=Pred_To_16_Onehot(cls_pred), y=Label_To_16_Onehot(cls_gt)) 
+        
 
-    # Metric CLS        
-    AUC                 = compute_roc_auc(total_cls_pred, total_cls_gt, to_onehot_y=True, softmax=True)
-
-    total_cls_pred      = Pred_To_Onehot(total_cls_pred)
-    total_cls_gt        = Label_To_Onehot(total_cls_gt)
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate()
     
-    confuse_metric(y_pred=total_cls_pred, y=total_cls_gt) # execute
-    metric_result       = confuse_metric.aggregate()
-
-    F1  = metric_result[0].item()
-    Acc = metric_result[1].item()
-    Sen = metric_result[2].item()
-    Spe = metric_result[3].item()
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
     
-    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} F1:{F1:.3f} Acc:{Acc:.3f} Sen:{Sen:.3f} Spe:{Spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, F1=F1, Acc=Acc, Sen=Sen, Spe=Spe))
-    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'F1':F1, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
+    auc_metric.reset()
+    confuse_metric.reset()
 
-# test code 
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+
 @torch.no_grad()
-def test_Uptask_Sup(model, criterion, data_loader, device, num_class, print_freq):
-    metric_logger = utils.MetricLogger(delimiter="  ")
+def test_Uptask_Sup(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'TEST:'
     
-    # Post-processing define
-    Pred_To_Onehot  = AsDiscrete(argmax=True,  to_onehot=True, num_classes=num_class, threshold_values=False, logit_thresh=0.5, rounding=None, n_classes=None)
-    Label_To_Onehot = AsDiscrete(argmax=False, to_onehot=True, num_classes=num_class, threshold_values=False, logit_thresh=0.5, rounding=None, n_classes=None)
-
-    # switch to evaluation mode
-    model.eval()
-    print_freq = 10
-    
-    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
-    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
-
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
         inputs  = batch_data["image"].to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
         cls_gt  = batch_data["label"].to(device)   # (B, 1)
 
-        with torch.no_grad():
-            cls_pred = model(inputs)
+        cls_pred = model(inputs)
             
-
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
 
@@ -178,33 +144,27 @@ def test_Uptask_Sup(model, criterion, data_loader, device, num_class, print_freq
         if loss_detail is not None:
             metric_logger.update(**loss_detail)
 
-        total_cls_pred  = torch.cat([total_cls_pred,  cls_pred],   dim=0)
-        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt],     dim=0)
+        # Metric CLS
+        auc            = auc_metric(y_pred=Softmax_To_Prob(cls_pred), y=Label_To_16_Onehot(cls_gt))
+        confuse_matrix = confuse_metric(y_pred=Pred_To_16_Onehot(cls_pred), y=Label_To_16_Onehot(cls_gt)) 
+        
 
-    # Metric CLS        
-    AUC                 = compute_roc_auc(total_cls_pred, total_cls_gt, to_onehot_y=True, softmax=True)
-
-    total_cls_pred      = Pred_To_Onehot(total_cls_pred)
-    total_cls_gt        = Label_To_Onehot(total_cls_gt)
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate()
     
-    confuse_metric(y_pred=total_cls_pred, y=total_cls_gt) # execute
-    metric_result       = confuse_metric.aggregate()
-
-    F1  = metric_result[0].item()
-    Acc = metric_result[1].item()
-    Sen = metric_result[2].item()
-    Spe = metric_result[3].item()
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
     
-    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} F1:{F1:.3f} Acc:{Acc:.3f} Sen:{Sen:.3f} Spe:{Spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, F1=F1, Acc=Acc, Sen=Sen, Spe=Spe))
-    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'F1':F1, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
+    auc_metric.reset()
+    confuse_metric.reset()
+
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
 
 
-# to do... 
-############################ Unsupervised ####################################
-def train_Uptask_Unsup_AE(model, criterion, data_loader, optimizer, device, epoch, print_freq):
+    # Unsupervised
+def train_Uptask_Unsup_AE(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size):
     model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     
@@ -236,17 +196,14 @@ def train_Uptask_Unsup_AE(model, criterion, data_loader, optimizer, device, epoc
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-# Evaluation code 
 @torch.no_grad()
-def valid_Uptask_Unsup_AE(model, criterion, data_loader, device, epoch, print_freq, save_dir):
-    metric_logger = utils.MetricLogger(delimiter="  ")
+def valid_Uptask_Unsup_AE(model, criterion, data_loader, device, epoch, print_freq, save_dir, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'Valid:'
 
     os.makedirs(save_dir, mode=0o777, exist_ok=True)
 
-    # switch to evaluation mode
-    model.eval()
-    
     # total_pred      = torch.tensor([], dtype=torch.float32, device='cuda')
     # total_inputs    = torch.tensor([], dtype=torch.float32, device='cuda')
 
@@ -297,18 +254,16 @@ def valid_Uptask_Unsup_AE(model, criterion, data_loader, device, epoch, print_fr
     return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
     
 
-# test code 
 @torch.no_grad()
-def test_Uptask_Unsup_AE(model, criterion, data_loader, device, print_freq, save_dir):
-    metric_logger = utils.MetricLogger(delimiter="  ")
+def test_Uptask_Unsup_AE(model, criterion, data_loader, device, print_freq, save_dir, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'TEST:'
 
     os.makedirs(save_dir, mode=0o777, exist_ok=True)
 
     feat_list = []
     save_dict = dict()
-    # switch to evaluation mode
-    model.eval()
     MAE_score = 0
     cnt = 0
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
@@ -355,8 +310,7 @@ def test_Uptask_Unsup_AE(model, criterion, data_loader, device, print_freq, save
     return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
     
 
-############################ Previous Works ####################################
-# 1. Model Genesis
+    # Previous Works - 1. Model Genesis
 def train_Uptask_ModelGenesis(model, criterion, data_loader, optimizer, device, epoch):
     # 2d slice-wise based Learning...! 
     model.train(True)
@@ -392,7 +346,7 @@ def train_Uptask_ModelGenesis(model, criterion, data_loader, optimizer, device, 
     print("Averaged stats:", metric_logger)
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-# Evaluation code 
+
 @torch.no_grad()
 def valid_Uptask_ModelGenesis(model, criterion, data_loader, device):
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -427,7 +381,7 @@ def valid_Uptask_ModelGenesis(model, criterion, data_loader, device):
     print('* Loss:{losses.global_avg:.3f} '.format(losses=metric_logger.loss))
     # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     return {'loss': metric_logger.loss.global_avg}
-# test code 
+
 @torch.no_grad()
 def test_Uptask_ModelGenesis(model, criterion, data_loader, device, epoch, output_dir):
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -477,24 +431,46 @@ def test_Uptask_ModelGenesis(model, criterion, data_loader, device, epoch, outpu
 
 
 
-######################################################                    Down Task                         ##########################################################
-############################ 1. General Fracture ####################################
-def train_Downtask_General_Frac(model, criterion, data_loader, optimizer, device, epoch):
+# Down Task
+    # General Fracture - Need for Customizing ...!
+def train_Downtask_General_Fracture(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
     # 2d slice-wise based Learning...! 
     model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
     
+    if gradual_unfreeze:
+        # Gradual Unfreezing
+        # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
+        if epoch >= 0 and epoch <= 100:
+            freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+            print("Freeze encoder ...!")
+        elif epoch >= 101 and epoch < 111:
+            print("Unfreeze encoder.layer4 ...!")
+            unfreeze_params(model.module.encoder.layer4) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer4)
+        elif epoch >= 111 and epoch < 121:
+            print("Unfreeze encoder.layer3 ...!")
+            unfreeze_params(model.module.encoder.layer3) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer3)
+        elif epoch >= 121 and epoch < 131:
+            print("Unfreeze encoder.layer2 ...!")
+            unfreeze_params(model.module.encoder.layer2) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer2)
+        elif epoch >= 131 and epoch < 141:
+            print("Unfreeze encoder.layer1 ...!")
+            unfreeze_params(model.module.encoder.layer1) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer1)
+        else :
+            print("Unfreeze encoder.stem ...!")
+            unfreeze_params(model.module.encoder) if hasattr(model, 'module') else unfreeze_params(model.encoder)
+    else :
+        print("Freeze encoder ...!")
+        freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
-        # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
+        inputs  = batch_data["image"].to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].to(device)     #                 ---> (B, 1)
 
-        cls_pred = model(inputs, x_lens)
+        cls_pred = model(inputs)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
@@ -511,36 +487,20 @@ def train_Downtask_General_Frac(model, criterion, data_loader, optimizer, device
             metric_logger.update(**loss_detail)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         
-    # Gather the stats from all processes
-    print("Averaged stats:", metric_logger)
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
 
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-# Evaluation code 
 @torch.no_grad()
-def valid_Downtask_General_Frac(model, criterion, data_loader, device):
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = 'Valid:'
-    
-    # switch to evaluation mode
+def valid_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
     model.eval()
-    print_freq = 10
-
-    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
-    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    header = 'Valid:'
 
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
         inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
-        # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
+        cls_gt  = batch_data["label"].to(device)   #                 ---> (B, 1)
 
-        with torch.no_grad():
-            cls_pred = model(inputs, x_lens)
-
-        total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
-        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
+        cls_pred = model(inputs)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
@@ -549,83 +509,40 @@ def valid_Downtask_General_Frac(model, criterion, data_loader, device):
             print("Loss is {}, stopping training".format(loss_value))
 
         # LOSS
-        metric_logger.update(loss=loss_value)
+        metric_logger.update(loss=loss_value) 
         if loss_detail is not None:
             metric_logger.update(**loss_detail)
 
-            
-    # Metric CLS
-    AUC = roc_auc_score(total_cls_gt, total_cls_pred)
-    f1  = f1_score(y_true=total_cls_gt, y_pred=total_cls_pred.round())
-    print("F1 score == ",  f1)    
-    confuse_result      = confuse_metric(y_pred=total_cls_pred.round(), y=total_cls_gt) 
-    confusion_matrix, _ = do_metric_reduction(confuse_result, MetricReduction.SUM)
+        # Post-processing
+        cls_pred = torch.sigmoid(cls_pred)
 
-    TP = confusion_matrix[0].item()
-    FP = confusion_matrix[1].item()
-    TN = confusion_matrix[2].item()
-    FN = confusion_matrix[3].item()
+        # Metric CLS
+        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
+        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)   # pred_cls must be round() !!
+
+
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate()
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
     
-    Acc = (TP+TN) / (TP+FP+TN+FN)
-    Sen = TP / (TP+FN)
-    Spe = TN / (TN+FP)
+    auc_metric.reset()
+    confuse_metric.reset()
 
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
 
-    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
-    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
-
-
-# test code 
 @torch.no_grad()
-def test_Downtask_General_Frac(model, criterion, data_loader, device, test_name, save_path):
-    metric_logger = utils.MetricLogger(delimiter="  ")
+def test_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'TEST:'
     
-    # switch to evaluation mode
-    model.eval()
-    print_freq = 10
-
-    # Save npz path 
-    save_dict = dict()
-    
-    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
-    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
-
-    img_path_list  = []
-    mask_path_list = []
-    img_list       = []
-    mask_list      = []
-    label_list     = []
-    cls_prob_list  = []
-    feature_list   = []
-    
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        img_path   = batch_data["img_path"][0]        # batch 1. so indexing [0]
-        mask_path  = batch_data["mask_path"][0]       # batch 1. so indexing [0]
-        inputs     = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        seg_gt     = batch_data["label"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt     = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens     = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
-        # x_lens     = batch_data["z_shape"].to(device) #    ---> (B, 1)
+        inputs  = batch_data["image"].to(device)     # (B, C, H, W, D)
+        cls_gt  = batch_data["label"].to(device)     #  ---> (B, 1)
 
-        with torch.no_grad():
-            model.linear1.register_forward_hook(get_features('feat')) # for Representation
-            cls_pred = model(inputs, x_lens)
-            # print("체크 확인용", features['feat'].shape)  #torch.Size([1, 512]) 
-
-            # Save
-            img_path_list.append(img_path)
-            mask_list.append(seg_gt.detach().cpu().numpy())
-            mask_path_list.append(mask_path)
-            img_list.append(inputs.detach().cpu().numpy())
-            label_list.append(cls_gt.detach().cpu().numpy())            
-            cls_prob_list.append(torch.sigmoid(cls_pred).detach().cpu().numpy())
-            feature_list.append(features['feat'].detach().cpu().numpy())
-            
-        total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
-        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
+        cls_pred = model(inputs)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
@@ -634,229 +551,24 @@ def test_Downtask_General_Frac(model, criterion, data_loader, device, test_name,
             print("Loss is {}, stopping training".format(loss_value))
 
         # LOSS
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-    
-    # Metric CLS
-    AUC = roc_auc_score(total_cls_gt, total_cls_pred)
-    confuse_result      = confuse_metric(y_pred=total_cls_pred.round(), y=total_cls_gt) 
-    confusion_matrix, _ = do_metric_reduction(confuse_result, MetricReduction.SUM)
-    f1  = f1_score(y_true=total_cls_gt, y_pred=total_cls_pred.round())
-    print("F1 score == ",  f1)
-    TP = confusion_matrix[0].item()
-    FP = confusion_matrix[1].item()
-    TN = confusion_matrix[2].item()
-    FN = confusion_matrix[3].item()
-    
-    Acc = (TP+TN) / (TP+FP+TN+FN)
-    Sen = TP / (TP+FN)
-    Spe = TN / (TN+FP)
-
-    # Save Prediction by using npz
-    save_dict['gt_img_path']  = img_path_list
-    save_dict['gt_mask_path'] = mask_path_list
-    save_dict['gt_img']       = img_list
-    save_dict['gt_mask']      = mask_list
-    save_dict['gt_label']     = label_list
-    save_dict['pred_label']   = cls_prob_list
-    save_dict['feature']      = feature_list
-
-    print("Saved npz...! => ", save_path + test_name + '_cls_3d[AUC_' + str(round(AUC, 3)) + '].npz')
-    np.savez(save_path + test_name + '_cls_3d[AUC_' + str(round(AUC, 3)) + '].npz', cls_3d=save_dict) 
-
-    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
-    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
-
-
-############################ 2. RSNA_BoneAge ####################################
-def train_Downtask_RSNA_BoneAge(model, criterion, data_loader, optimizer, device, epoch):
-    # 2d slice-wise based Learning...! 
-    model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
-    
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
-        # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
-
-        cls_pred = model(inputs, x_lens)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-    # Gather the stats from all processes
-    print("Averaged stats:", metric_logger)
-
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-# Evaluation code 
-@torch.no_grad()
-def valid_Downtask_RSNA_BoneAge(model, criterion, data_loader, device):
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = 'Valid:'
-    
-    # switch to evaluation mode
-    model.eval()
-    print_freq = 10
-
-    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
-    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
-
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens  = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
-        # x_lens  = batch_data["z_shape"].to(device) #    ---> (B, 1)
-
-        with torch.no_grad():
-            cls_pred = model(inputs, x_lens)
-
-        total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
-        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value)
+        metric_logger.update(loss=loss_value) 
         if loss_detail is not None:
             metric_logger.update(**loss_detail)
 
-            
-    # Metric CLS
-    AUC = roc_auc_score(total_cls_gt, total_cls_pred)
-    f1  = f1_score(y_true=total_cls_gt, y_pred=total_cls_pred.round())
-    print("F1 score == ",  f1)    
-    confuse_result      = confuse_metric(y_pred=total_cls_pred.round(), y=total_cls_gt) 
-    confusion_matrix, _ = do_metric_reduction(confuse_result, MetricReduction.SUM)
-
-    TP = confusion_matrix[0].item()
-    FP = confusion_matrix[1].item()
-    TN = confusion_matrix[2].item()
-    FN = confusion_matrix[3].item()
-    
-    Acc = (TP+TN) / (TP+FP+TN+FN)
-    Sen = TP / (TP+FN)
-    Spe = TN / (TN+FP)
-
-
-    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
-    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
-
-
-# test code 
-@torch.no_grad()
-def test_Downtask_RSNA_BoneAge(model, criterion, data_loader, device, test_name, save_path):
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = 'TEST:'
-    
-    # switch to evaluation mode
-    model.eval()
-    print_freq = 10
-
-    # Save npz path 
-    save_dict = dict()
-    
-    total_cls_pred  = torch.tensor([], dtype=torch.float32, device='cpu')
-    total_cls_gt    = torch.tensor([], dtype=torch.float32, device='cpu')
-
-    img_path_list  = []
-    mask_path_list = []
-    img_list       = []
-    mask_list      = []
-    label_list     = []
-    cls_prob_list  = []
-    feature_list   = []
-    
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        # Post-processing
+        cls_pred = torch.sigmoid(cls_pred)
         
-        img_path   = batch_data["img_path"][0]        # batch 1. so indexing [0]
-        mask_path  = batch_data["mask_path"][0]       # batch 1. so indexing [0]
-        inputs     = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        seg_gt     = batch_data["label"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt     = batch_data["label"].flatten(1).bool().any(dim=1).float().unsqueeze(1).to(device) #    ---> (B, 1)
-        x_lens     = batch_data["z_shape"]            #    ---> (B, 1) 최근에 Bug 생김. cpu로 넣어줘야 함.
-        # x_lens     = batch_data["z_shape"].to(device) #    ---> (B, 1)
+        # Metric CLS
+        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
+        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)   # pred_cls must be round() !!
 
-        with torch.no_grad():
-            model.linear1.register_forward_hook(get_features('feat')) # for Representation
-            cls_pred = model(inputs, x_lens)
-            # print("체크 확인용", features['feat'].shape)  #torch.Size([1, 512]) 
 
-            # Save
-            img_path_list.append(img_path)
-            mask_list.append(seg_gt.detach().cpu().numpy())
-            mask_path_list.append(mask_path)
-            img_list.append(inputs.detach().cpu().numpy())
-            label_list.append(cls_gt.detach().cpu().numpy())            
-            cls_prob_list.append(torch.sigmoid(cls_pred).detach().cpu().numpy())
-            feature_list.append(features['feat'].detach().cpu().numpy())
-            
-        total_cls_pred  = torch.cat([total_cls_pred,  torch.sigmoid(cls_pred).detach().cpu()],   dim=0)
-        total_cls_gt    = torch.cat([total_cls_gt,    cls_gt.detach().cpu()],     dim=0)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate() 
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
     
-    # Metric CLS
-    AUC = roc_auc_score(total_cls_gt, total_cls_pred)
-    confuse_result      = confuse_metric(y_pred=total_cls_pred.round(), y=total_cls_gt) 
-    confusion_matrix, _ = do_metric_reduction(confuse_result, MetricReduction.SUM)
-    f1  = f1_score(y_true=total_cls_gt, y_pred=total_cls_pred.round())
-    print("F1 score == ",  f1)
-    TP = confusion_matrix[0].item()
-    FP = confusion_matrix[1].item()
-    TN = confusion_matrix[2].item()
-    FN = confusion_matrix[3].item()
-    
-    Acc = (TP+TN) / (TP+FP+TN+FN)
-    Sen = TP / (TP+FN)
-    Spe = TN / (TN+FP)
+    auc_metric.reset()
+    confuse_metric.reset()
 
-    # Save Prediction by using npz
-    save_dict['gt_img_path']  = img_path_list
-    save_dict['gt_mask_path'] = mask_path_list
-    save_dict['gt_img']       = img_list
-    save_dict['gt_mask']      = mask_list
-    save_dict['gt_label']     = label_list
-    save_dict['pred_label']   = cls_prob_list
-    save_dict['feature']      = feature_list
-
-    print("Saved npz...! => ", save_path + test_name + '_cls_3d[AUC_' + str(round(AUC, 3)) + '].npz')
-    np.savez(save_path + test_name + '_cls_3d[AUC_' + str(round(AUC, 3)) + '].npz', cls_3d=save_dict) 
-
-    print('* Loss:{losses.global_avg:.3f} | AUC:{AUC:.3f} Acc:{acc:.3f} Sen:{sen:.3f} Spe:{spe:.3f} '.format(losses=metric_logger.loss, AUC=AUC, acc=Acc, sen=Sen, spe=Spe))
-    return {'loss': metric_logger.loss.global_avg, 'AUC':AUC, 'Acc': Acc, 'Sen': Sen, 'Spe': Spe}
-
-
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}

@@ -311,9 +311,9 @@ class ResNet(nn.Module):
 
     def _forward_impl(self, x: Tensor) -> Tensor:
         # print("0 == ", x.shape)   torch.Size([16, 1, 512, 512])  (input: 512x512 기준)
-        x = self.relu(self.bn1(self.conv1(x)))  # stem
+        x = self.maxpool(self.relu(self.bn1(self.conv1(x))))  # stem
         # print("1 == ", x.shape)   torch.Size([16, 64, 256, 256])  
-        x = self.layer1(self.maxpool(x))        # stage1
+        x = self.layer1(x)        # stage1
         # print("2 == ", x.shape)   torch.Size([16, 256, 128, 128])
         x = self.layer2(x)                      # stage2
         # print("3 == ", x.shape)   torch.Size([16, 512, 64, 64])
