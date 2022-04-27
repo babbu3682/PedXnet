@@ -3,13 +3,13 @@ import torch.nn as nn
 
 # UpTask
     # Supervised Model  
-from modules.sunggu_resnet import resnet50
-from modules.sunggu_autoencoder import Resnet_AutoEncoder
+from arch.sunggu_resnet import resnet50
+from arch.sunggu_autoencoder import Resnet_AutoEncoder
 
 
     # Unsupervised Model - Previous Works 
-# from modules.sunggu_autoencoder import Resnet_AutoEncoder      # Model Genesis
-# from modules.sunggu_modelgenensis import Resnet_AutoEncoder    # Trans VW
+# from arch.sunggu_autoencoder import Resnet_AutoEncoder      # Model Genesis
+# from arch.sunggu_modelgenensis import Resnet_AutoEncoder    # Trans VW
 
 
 
@@ -80,7 +80,7 @@ def create_model(stream, name):
 
     elif stream == 'Downstream':
         # Need for Customizing ... !
-        if name == 'General Fracture':
+        if name == 'Downtask_General_Fracture':
             model = General_Fracture_Model()
 
 

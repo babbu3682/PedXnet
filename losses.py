@@ -1,70 +1,63 @@
 import torch
 
-# class Dice_BCE_Loss(torch.nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.loss_function_1 = DiceLoss(mode='binary', from_logits=True)
-#         self.loss_function_2 = torch.nn.BCEWithLogitsLoss()
-#         self.dice_weight     = 1.0   
-#         self.bce_weight      = 1.0   
 
-#     def forward(self, y_pred, y_true):
-#         dice_loss  = self.loss_function_1(y_pred, y_true)
-#         bce_loss   = self.loss_function_2(y_pred, y_true)
-
-#         return self.dice_weight*dice_loss + self.bce_weight*bce_loss
-
-
-######################################################                    Uptask Loss                         ########################################################
-
+# Uptask Loss 
 class Uptask_Loss(torch.nn.Module):
-    def __init__(self, mode='Supervised', model_name='Uptask_Sup_Classifier'):
+    def __init__(self, model_name='Uptask_Sup_Classifier'):
         super().__init__()
-        self.mode       = mode
         self.model_name = model_name
-        self.CE_loss    = torch.nn.CrossEntropyLoss()
+
+        self.CE_loss    = torch.nn.CrossEntropyLoss()  #  you should not use softmax before.
         self.L1_loss    = torch.nn.L1Loss()
         self.L2_loss    = torch.nn.MSELoss()
-        self.weight_Loss1   = 1.0
+
+        self.loss1_weight = 1.0
+        self.loss2_weight = 1.0
+        self.loss3_weight = 1.0
 
     def forward(self, pred=None, gt=None):
-        if self.mode == 'Supervised':
-            if self.model_name == 'Uptask_Sup_Classifier':
-                Loss_1 = self.CE_loss(pred, gt)
-                return self.weight_Loss1*Loss_1, {'CE_Loss':(self.weight_Loss1*Loss_1).item()}
-        
-        elif self.mode == 'Unsupervised':
-            if self.model_name == 'Uptask_Unsup_AutoEncoder':
-                Loss_1 = self.L1_loss(pred, gt)
-                return self.weight_Loss1*Loss_1, {'L1_loss':(self.weight_Loss1*Loss_1).item()}
+        if self.model_name == 'Uptask_Sup_Classifier':
+            Loss_1 = self.CE_loss(pred, gt)
+            total  = self.loss1_weight*Loss_1
+            return total, {'CE_Loss':(self.loss1_weight*Loss_1).item()}
+    
+        elif self.model_name == 'Uptask_Unsup_AutoEncoder':
+            Loss_1 = self.L1_loss(pred, gt)
+            total  = self.loss1_weight*Loss_1
+            return total, {'L1_loss':(self.loss1_weight*Loss_1).item()}
 
-            elif self.model_name == 'Uptask_Unsup_ModelGenesis':
-                Loss_1 = self.CE_loss(pred, gt)
-                return self.weight_Loss1*Loss_1, {'CE_Loss':(self.weight_Loss1*Loss_1).item()}
+        elif self.model_name == 'Uptask_Unsup_ModelGenesis':
+            Loss_1 = self.CE_loss(pred, gt)
+            total  = self.loss1_weight*Loss_1
+            return total, {'CE_Loss':(self.loss1_weight*Loss_1).item()}
 
         else: 
-            raise Exception('Error...! self.mode')
+            raise Exception('Error...! self.model_name in Loss')      
 
-
-######################################################                    Downtask Loss                       ########################################################
-
-
+# Downtask Loss
 class Downtask_Loss(torch.nn.Module):
-    def __init__(self, mode='1.General_Fracture'):
+    def __init__(self, model_name='Downtask_General_Fracture'):
         super().__init__()
-        self.mode      = mode
+        self.model_name = model_name
         
         self.BCE_loss  = torch.nn.BCEWithLogitsLoss()
-        self.Loss_1_W  = 1.0
+        self.L1_loss   = torch.nn.L1Loss()
+        self.L2_loss   = torch.nn.MSELoss()
+
+        self.loss1_weight = 1.0
+        self.loss2_weight = 1.0
+        self.loss3_weight = 1.0
 
     def forward(self, cls_pred=None, cls_gt=None):
-        if self.mode == 'Supervised':
+        if self.model_name == 'Downtask_General_Fracture':
             Loss_1 = self.BCE_loss(cls_pred, cls_gt)
-            return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+            total  = self.loss1_weight*Loss_1
+            return total, {'BCE_Loss':(self.loss1_weight*Loss_1).item()}
         
-        elif self.mode == 'Unsupervised':
-            Loss_1 = self.BCE_loss(cls_pred, cls_gt)
-            return self.Loss_1_W*Loss_1, {'CE_Loss':(self.Loss_1_W*Loss_1).item()}
+        elif self.model_name == 'Downtask_RSNA_BAA':
+            Loss_1 = self.L1_loss(cls_pred, cls_gt)
+            total  = self.loss1_weight*Loss_1
+            return total, {'L1_Loss':(self.loss1_weight*Loss_1).item()}
 
         else: 
-            raise Exception('Error...! self.mode')      
+            raise Exception('Error...! self.model_name in Loss')      

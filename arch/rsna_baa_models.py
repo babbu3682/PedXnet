@@ -42,7 +42,7 @@ class RSNA_BAA_Model(nn.Module):
 
         self.pool  = nn.AdaptiveAvgPool2d(1)
         
-        self.fc1   = nn.Linear(2049, 1024)
+        self.fc1   = nn.Linear(2048+1, 1024)  # +1 is for gender.
         self.relu1 = nn.ReLU()
         self.drop1 = nn.Dropout(0.5)
         

@@ -68,7 +68,6 @@ def get_args_parser():
     
     # Setting Upstream, Downstream task
     parser.add_argument('--training-stream', default='Upstream', choices=['Upstream', 'Downstream'], type=str, help='training stream')  
-    parser.add_argument('--training-type',   default='Supervised', choices=['Supervised', 'Unsupervised'], type=str, help='training type')  
 
     # DataParrel or Single GPU train
     parser.add_argument('--multi-gpu-mode',       default='DataParallel', choices=['DataParallel', 'Single'], type=str, help='multi-gpu-mode')          
@@ -104,13 +103,6 @@ torch.backends.cudnn.benchmark = False
 np.random.seed(random_seed)
 random.seed(random_seed)
 
-# def default_collate_fn(batch):
-#     batch = list(filter(lambda x: x is not None, batch))
-#     return torch.utils.data.dataloader.default_collate(batch)
-
-def default_collate_fn(batch):
-    batch = list(filter(lambda x: torch.isnan(x['image'].max()).item() == False, batch))
-    return torch.utils.data.dataloader.default_collate(batch)
 
 
 def main(args):
@@ -122,15 +114,15 @@ def main(args):
     dataset_train, collate_fn_train = build_dataset(is_train=True,  args=args)   
     dataset_valid, collate_fn_valid = build_dataset(is_train=False, args=args)
     
-    data_loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True,  pin_memory=args.pin_mem, drop_last=True,  collate_fn=default_collate_fn)
-    data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=default_collate_fn)
-    # data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=1,               num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=default_collate_fn)
+    data_loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True,  pin_memory=args.pin_mem, drop_last=True,  collate_fn=collate_fn_train)
+    data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=collate_fn_valid)
+    # data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=1,               num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=collate_fn_train)
 
     # Select Loss
     if args.training_stream == 'Upstream':
-        criterion = Uptask_Loss(mode=args.training_mode, model_name=args.model_name)
+        criterion = Uptask_Loss(model_name=args.model_name)
     elif args.training_stream == 'Downstream':
-        criterion = Downtask_Loss(mode=args.training_mode, model_name=args.model_name)
+        criterion = Downtask_Loss(model_name=args.model_name)
     else: 
         raise Exception('Error...! args.training_stream')
 
