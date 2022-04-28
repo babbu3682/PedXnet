@@ -37,7 +37,7 @@ def get_pixels_hu(path):
         image  = apply_modality_lut(image, dcm_image)        
     except:
         image = image.astype(np.int16)
-        image[image == -2000] = 0
+        # image[image == -2000] = 0     # This is only for CT.
 
         intercept = dcm_image.RescaleIntercept
         slope     = dcm_image.RescaleSlope
