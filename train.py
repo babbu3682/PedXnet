@@ -4,19 +4,17 @@ import datetime
 import numpy as np
 import time
 import torch
-import torch.backends.cudnn as cudnn
 import random
 import json
 from pathlib import Path
 
 import utils
 from create_model import create_model
-from datasets.prepare_datasets import build_dataset
-from engine import *
-from losses import Uptask_Loss, Downtask_Loss
+from create_datasets.prepare_datasets import build_dataset
 from optimizers import create_optim
 from lr_schedulers import create_scheduler
-
+from losses import Uptask_Loss, Downtask_Loss
+from engine import *
 
 
 def str2bool(v):
@@ -205,7 +203,7 @@ def main(args):
             elif args.model_name == 'Uptask_Unsup_AutoEncoder':
                 train_stats = train_Uptask_Unsup_AE(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
                 print("Averaged train_stats: ", train_stats)
-                valid_stats = valid_Uptask_Unsup_AE(model, criterion, data_loader_valid, device, epoch, args.print_freq, args.save_dir, args.batch_size)
+                valid_stats = valid_Uptask_Unsup_AE(model, criterion, data_loader_valid, device, epoch, args.print_freq, args.png_save_dir, args.batch_size)
                 print("Averaged valid_stats: ", valid_stats)
 
             elif args.model_name == 'Uptask_Unsup_ModelGenesis':
@@ -230,7 +228,7 @@ def main(args):
 
           
         # Save & Prediction png
-        checkpoint_paths = args.output_dir + '/epoch_' + str(epoch) + '_checkpoint.pth'
+        checkpoint_paths = args.checkpoint_dir + '/epoch_' + str(epoch) + '_checkpoint.pth'
         torch.save({
             'model_state_dict': model.state_dict() if args.multi_gpu_mode == 'Single' else model.module.state_dict(),
             'optimizer': optimizer.state_dict(),
@@ -243,8 +241,8 @@ def main(args):
                     **{f'valid_{k}': v for k, v in valid_stats.items()},
                     'epoch': epoch}
         
-        if args.output_dir:
-            with open(args.output_dir + "/log.txt", "a") as f:
+        if args.checkpoint_dir:
+            with open(args.checkpoint_dir + "/log.txt", "a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
         lr_scheduler.step(epoch)
@@ -260,8 +258,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('PedXNet training and evaluation script', parents=[get_args_parser()])
     args   = parser.parse_args()
 
-    if args.output_dir:
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    if args.checkpoint_dir:
+        Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
         
     os.environ["CUDA_DEVICE_ORDER"]     =  args.cuda_device_order
     os.environ["CUDA_VISIBLE_DEVICES"]  =  args.cuda_visible_devices        
