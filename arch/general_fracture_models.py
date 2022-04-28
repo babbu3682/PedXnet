@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from sunggu_resnet import ResNet
+from sunggu_resnet import ResNet, Bottleneck
 
 
-class ResNet_Feature_Extractor(ResNet):
+class ResNet_Feature_Extractor(ResNet(block=Bottleneck, layers=[3, 4, 6, 3])):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         
