@@ -244,9 +244,10 @@ def New_PedXNet_Dataset(mode):
             AddChanneld(keys=["image"]),              
 
             # (45 degree rotation, vertical & horizontal flip & scaling)
+            RandRotate90d(keys=["n_20", "n_100"], prob=0.1, spatial_axes=[0, 1], allow_missing_keys=False),
             RandFlipd(keys=["image"], prob=0.1, spatial_axis=[0, 1], allow_missing_keys=False),
-            RandRotated(keys=["image"], prob=0.1, range_x=np.pi/4, range_y=np.pi/4, range_z=0.0, keep_size=True, align_corners=False, allow_missing_keys=False),
-            RandZoomd(keys=["image"], prob=0.1, min_zoom=0.5, max_zoom=2.0, align_corners=None, keep_size=True, allow_missing_keys=False),
+            RandRotated(keys=["image"], prob=0.1, range_x=np.pi/12, range_y=np.pi/12, range_z=0.0, keep_size=True, align_corners=False, allow_missing_keys=False),
+            RandZoomd(keys=["image"], prob=0.1, min_zoom=0.8, max_zoom=1.2, align_corners=None, keep_size=True, allow_missing_keys=False),
             
             # Normalize
             Lambdad(keys=["image"], func=functools.partial(minmax_normalize, option=False)),                  
