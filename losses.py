@@ -36,7 +36,7 @@ class Uptask_Loss(torch.nn.Module):
 
 # Downtask Loss
 class Downtask_Loss(torch.nn.Module):
-    def __init__(self, model_name='Downtask_General_Fracture'):
+    def __init__(self, model_name):
         super().__init__()
         self.model_name = model_name
         
@@ -49,15 +49,15 @@ class Downtask_Loss(torch.nn.Module):
         self.loss3_weight = 1.0
 
     def forward(self, cls_pred=None, cls_gt=None):
-        if self.model_name == 'Downtask_General_Fracture':
+        if self.model_name == 'Downtask_General_Fracture' or self.model_name == 'Downtask_Pneumonia':
             Loss_1 = self.BCE_loss(cls_pred, cls_gt)
             total  = self.loss1_weight*Loss_1
             return total, {'BCE_Loss':(self.loss1_weight*Loss_1).item()}
         
-        elif self.model_name == 'Downtask_RSNA_BAA':
-            Loss_1 = self.L1_loss(cls_pred, cls_gt)
+        elif self.model_name == 'Downtask_RSNA_Boneage':
+            Loss_1 = self.L2_loss(cls_pred, cls_gt)
             total  = self.loss1_weight*Loss_1
-            return total, {'L1_Loss':(self.loss1_weight*Loss_1).item()}
+            return total, {'L2_Loss':(self.loss1_weight*Loss_1).item()}
 
         else: 
             raise Exception('Error...! self.model_name in Loss')      
