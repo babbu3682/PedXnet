@@ -7,7 +7,7 @@ import torchvision
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-
+from pathlib import Path
 from metrics import *
 
 
@@ -427,10 +427,6 @@ def test_Uptask_ModelGenesis(model, criterion, data_loader, device, epoch, outpu
     return {'loss': metric_logger.loss.global_avg, 'Dice': Dice}
 
 
-
-
-
-
 # Down Task
     # General Fracture - Need for Customizing ...!
 def train_Downtask_General_Fracture(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
@@ -441,6 +437,148 @@ def train_Downtask_General_Fracture(model, criterion, data_loader, optimizer, de
     header = 'Epoch: [{}]'.format(epoch)
     
     if gradual_unfreeze:
+        # Gradual Unfreezing
+        # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
+        if epoch >= 0 and epoch <= 100:
+            freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+            print("Freeze encoder ...!!")
+        elif epoch >= 101 and epoch < 111:
+            print("Unfreeze encoder.layer4 ...!")
+            unfreeze_params(model.module.encoder.layer4) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer4)
+        elif epoch >= 111 and epoch < 121:
+            print("Unfreeze encoder.layer3 ...!")
+            unfreeze_params(model.module.encoder.layer3) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer3)
+        elif epoch >= 121 and epoch < 131:
+            print("Unfreeze encoder.layer2 ...!")
+            unfreeze_params(model.module.encoder.layer2) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer2)
+        elif epoch >= 131 and epoch < 141:
+            print("Unfreeze encoder.layer1 ...!")
+            unfreeze_params(model.module.encoder.layer1) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer1)
+        else :
+            print("Unfreeze encoder.stem ...!")
+            unfreeze_params(model.module.encoder) if hasattr(model, 'module') else unfreeze_params(model.encoder)
+    else :
+        print("Freeze encoder ...!")
+        freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #                 ---> (B, 1)
+        assert len(cls_gt.shape) == 2
+
+        cls_pred = model(inputs)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        metric_logger.update(loss=loss_value)
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+
+@torch.no_grad()
+def valid_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    header = 'Valid:'
+
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)   #                 ---> (B, 1)
+
+        cls_pred = model(inputs)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        # LOSS
+        metric_logger.update(loss=loss_value) 
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+
+        # # Post-processing
+        cls_pred = torch.sigmoid(cls_pred)
+
+        # Metric CLS
+        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
+        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)
+
+
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate()
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
+    
+    auc_metric.reset()
+    confuse_metric.reset()
+
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+
+@torch.no_grad()
+def test_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    header = 'TEST:'
+    
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)     # (B, C, H, W, D)
+        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #  ---> (B, 1)
+
+        cls_pred = model(inputs)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        # LOSS
+        metric_logger.update(loss=loss_value) 
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+
+        # # Post-processing
+        cls_pred = torch.sigmoid(cls_pred)
+        
+        # Metric CLS
+        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
+        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)   # pred_cls must be round() !!
+
+
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate() 
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
+    
+    auc_metric.reset()
+    confuse_metric.reset()
+
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+
+
+def train_Downtask_Pneumonia(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
+    # 2d slice-wise based Learning...! 
+    model.train(True)
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch)
+    
+    if gradual_unfreeze is not None:
         # Gradual Unfreezing
         # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
         if epoch >= 0 and epoch <= 100:
@@ -468,9 +606,151 @@ def train_Downtask_General_Fracture(model, criterion, data_loader, optimizer, de
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
         inputs  = batch_data["image"].to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].to(device)     #                 ---> (B, 1)
+        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #                 ---> (B, 1)
+        # print(cls_gt.shape)
 
         cls_pred = model(inputs)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        metric_logger.update(loss=loss_value)
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+
+@torch.no_grad()
+def valid_Downtask_Pneumonia(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    header = 'Valid:'
+
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)   #                 ---> (B, 1)
+
+        cls_pred = model(inputs)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        # LOSS
+        metric_logger.update(loss=loss_value) 
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+
+        # # Post-processing
+        cls_pred = torch.sigmoid(cls_pred)
+
+        # Metric CLS
+        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
+        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)
+
+
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate()
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
+    
+    auc_metric.reset()
+    confuse_metric.reset()
+
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+@torch.no_grad()
+def test_Downtask_Pneumonia(model, criterion, data_loader, device, print_freq, batch_size):
+    model.eval()
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    header = 'TEST:'
+    
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].to(device)     # (B, C, H, W, D)
+        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #  ---> (B, 1)
+
+        cls_pred = model(inputs)
+
+        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss_value = loss.item()
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        # LOSS
+        metric_logger.update(loss=loss_value) 
+        if loss_detail is not None:
+            metric_logger.update(**loss_detail)
+
+        # # Post-processing
+        cls_pred = torch.sigmoid(cls_pred)
+
+        # Metric CLS
+        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
+        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)
+
+
+    # Aggregatation
+    auc                = auc_metric.aggregate()
+    f1, acc, sen, spe  = confuse_metric.aggregate()
+    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
+    
+    auc_metric.reset()
+    confuse_metric.reset()
+
+    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+
+
+def train_Downtask_RSNA_BAA(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
+    # 2d slice-wise based Learning...! 
+    model.train(True)
+    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch)
+    
+    # if gradual_unfreeze is not None:
+    #     # Gradual Unfreezing
+    #     # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
+    #     if epoch >= 0 and epoch <= 100:
+    #         freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+    #         print("Freeze encoder ...!")
+    #     elif epoch >= 101 and epoch < 111:
+    #         print("Unfreeze encoder.layer4 ...!")
+    #         unfreeze_params(model.module.encoder.layer4) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer4)
+    #     elif epoch >= 111 and epoch < 121:
+    #         print("Unfreeze encoder.layer3 ...!")
+    #         unfreeze_params(model.module.encoder.layer3) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer3)
+    #     elif epoch >= 121 and epoch < 131:
+    #         print("Unfreeze encoder.layer2 ...!")
+    #         unfreeze_params(model.module.encoder.layer2) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer2)
+    #     elif epoch >= 131 and epoch < 141:
+    #         print("Unfreeze encoder.layer1 ...!")
+    #         unfreeze_params(model.module.encoder.layer1) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer1)
+    #     else :
+    #         print("Unfreeze encoder.stem ...!")
+    #         unfreeze_params(model.module.encoder) if hasattr(model, 'module') else unfreeze_params(model.encoder)
+    # else :
+    #     print("Freeze encoder ...!")
+    #     freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+
+    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+        
+        inputs  = batch_data["image"].float().to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].float().to(device)     #                 ---> (B, 1)
+        gender  = batch_data['gender'].float().to(device)
+        
+        cls_pred = model(inputs, gender)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
@@ -490,85 +770,67 @@ def train_Downtask_General_Fracture(model, criterion, data_loader, optimizer, de
     return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
 
 @torch.no_grad()
-def valid_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+def valid_Downtask_RSNA_BAA(model, criterion, data_loader, device, print_freq, batch_size):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'Valid:'
 
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].to(device)   #                 ---> (B, 1)
+        inputs  = batch_data["image"].float().to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        cls_gt  = batch_data["label"].float().to(device)   #                 ---> (B, 1)
+        gender  = batch_data['gender'].float().to(device) 
 
-        cls_pred = model(inputs)
+        cls_pred = model(inputs, gender)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
+        
+        MAE = F.l1_loss(input=cls_pred, target=cls_gt).item()
 
         # LOSS
-        metric_logger.update(loss=loss_value) 
+        # Metric
+        metric_logger.update(loss=loss_value)
+        metric_logger.update(metric=MAE)
         if loss_detail is not None:
             metric_logger.update(**loss_detail)
 
-        # Post-processing
-        cls_pred = torch.sigmoid(cls_pred)
+    print('* Loss:{losses.global_avg:.3f} | Metric:{metric.global_avg:.3f} '.format(losses=metric_logger.loss, metric=metric_logger.metric))
 
-        # Metric CLS
-        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
-        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)   # pred_cls must be round() !!
-
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate()
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
-
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+    return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
 
 @torch.no_grad()
-def test_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+def test_Downtask_RSNA_BAA(model, criterion, data_loader, device, print_freq, batch_size):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
     header = 'TEST:'
     
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)     # (B, C, H, W, D)
-        cls_gt  = batch_data["label"].to(device)     #  ---> (B, 1)
+        inputs  = batch_data["image"].float().to(device)     # (B, C, H, W, D)
+        cls_gt  = batch_data["label"].float().to(device)     #  ---> (B, 1)
+        gender  = batch_data['gender'].float().to(device) 
 
-        cls_pred = model(inputs)
+        cls_pred = model(inputs, gender)
 
         loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
+        
+        MAE = F.l1_loss(input=cls_pred, target=cls_gt).item()
 
         # LOSS
-        metric_logger.update(loss=loss_value) 
+        # Metric
+        metric_logger.update(loss=loss_value)
+        metric_logger.update(metric=MAE)
         if loss_detail is not None:
             metric_logger.update(**loss_detail)
 
-        # Post-processing
-        cls_pred = torch.sigmoid(cls_pred)
-        
-        # Metric CLS
-        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
-        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)   # pred_cls must be round() !!
+    print('* Loss:{losses.global_avg:.3f} | Metric:{metric.global_avg:.3f} '.format(losses=metric_logger.loss, metric=metric_logger.metric))
 
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate() 
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
-
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+    return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}

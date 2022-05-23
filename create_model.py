@@ -3,8 +3,12 @@ import torch.nn as nn
 
 # UpTask
     # Supervised Model  
-from arch.sunggu_resnet import resnet50
+# from arch.sunggu_resnet import resnet50
 from arch.sunggu_autoencoder import Resnet_AutoEncoder
+from arch.general_fracture_models import General_Fracture_Model
+from arch.rsna_baa_models import *
+from arch.pneumonia_models import *
+
 
 
     # Unsupervised Model - Previous Works 
@@ -20,11 +24,8 @@ from arch.sunggu_autoencoder import Resnet_AutoEncoder
 
 def Downtask_Model(task_name, pretrained, freeze_backbone, backbone_name):
     if task_name == '1.General_Fracture':
-        model = Patient_Cls_model(end2end=end2end, backbone_name=backbone_name)
-    elif task_name == '2.RSNA_BoneAge':
-        model = Patient_Cls_model(end2end=end2end, backbone_name=backbone_name)
-    elif task_name == '3.Nodule_Detection':
-        model = Patient_Cls_model(end2end=end2end, backbone_name=backbone_name)        
+        model = General_Fracture_Model(backbone_name=backbone_name)
+        
     else : 
         raise Exception('Error...! task_name')    
 
@@ -82,6 +83,13 @@ def create_model(stream, name):
         # Need for Customizing ... !
         if name == 'Downtask_General_Fracture':
             model = General_Fracture_Model()
+        
+        elif name == 'Downtask_RSNA_Boneage':
+            model = RSNA_BAA_Model()
+        
+        elif name == 'Downtask_Pneumonia':
+            model = Pneumonia_Model()
+        
 
 
     else :

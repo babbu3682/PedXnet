@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from sunggu_resnet import ResNet
+from arch.sunggu_resnet import ResNet, Bottleneck
 
 
 class ResNet_Feature_Extractor(ResNet):
@@ -29,15 +29,13 @@ class ResNet_Feature_Extractor(ResNet):
         super().load_state_dict(state_dict, **kwargs)
 
 
-
-
 # DownTask
     # General Fracture
 class General_Fracture_Model(nn.Module):
     def __init__(self):
         super(General_Fracture_Model, self).__init__()
 
-        self.feat_extractor = ResNet_Feature_Extractor()
+        self.encoder = ResNet_Feature_Extractor(block=Bottleneck, layers=[3, 4, 6, 3])
 
         self.pool  = nn.AdaptiveAvgPool2d(1)
         
@@ -52,7 +50,7 @@ class General_Fracture_Model(nn.Module):
         self.head  = nn.Linear(1024, 1)
         
     def forward(self, x):
-        x = self.feat_extractor(x)
+        x = self.encoder(x)
         x = self.pool(x)
         x = x.view(x.shape[0], -1)
         
@@ -61,4 +59,3 @@ class General_Fracture_Model(nn.Module):
         x = self.head(x)
         
         return x
-
