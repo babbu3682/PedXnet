@@ -11,11 +11,13 @@ from pathlib import Path
 import utils
 from create_model import create_model
 from create_datasets.prepare_datasets import build_dataset
+
+from engine import *
+from losses import Uptask_Loss, Downtask_Loss
 from optimizers import create_optim
 from lr_schedulers import create_scheduler
 from losses import Uptask_Loss, Downtask_Loss
 from engine import *
-
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -29,39 +31,39 @@ def get_args_parser():
     parser = argparse.ArgumentParser('PedXNet Deep-Learning Train and Evaluation script', add_help=False)
 
     # Dataset parameters
-    # parser.add_argument('--data-set', default='CIFAR10', type=str, help='dataset name')    
-    parser.add_argument('--data-folder-dir', default="/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples", type=str, help='dataset folder dirname')    
+    parser.add_argument('--data_set', default='General_Fracture', choices=['PedXnet_Sup_16class', 'General_Fracture', 'RSNA_BAA', 'Pneumonia'], type=str, help='dataset name')  
+    parser.add_argument('--data_folder_dir', default="/mnt/nas125_vol2/kanggilpark/child/PedXnet_Code_Factory/datasets", type=str, help='dataset folder dirname')
 
     # Model parameters
-    parser.add_argument('--model-name',      default='PedXNet',  type=str, help='model name')    
+    parser.add_argument('--model_name',      default='Downtask_General_Fracture',  type=str, help='model name')
 
     # DataLoader setting
     parser.add_argument('--batch-size',  default=72, type=int)
-    parser.add_argument('--num_workers', default=10, type=int)
-    parser.add_argument('--pin-mem',    action='store_true', default=False, help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
+    parser.add_argument('--num_workers', default=8, type=int)
+    parser.add_argument('--pin-mem',    action='store_true', default=True, help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
 
     # Optimizer parameters
-    parser.add_argument('--optimizer', default='AdamW', type=str, metavar='OPTIMIZER', help='Optimizer (default: "AdamW"')
+    parser.add_argument('--optimizer', default='adamw', type=str, metavar='OPTIMIZER', help='Optimizer (default: "adamw"')
 
     # Learning rate and schedule and Epoch parameters
     parser.add_argument('--lr-scheduler', default='poly_lr', type=str, metavar='lr_scheduler', help='lr_scheduler (default: "poly_learning_rate"')
-    parser.add_argument('--epochs', default=1000, type=int, help='Upstream 1000 epochs, Downstream 500 epochs')  
+    parser.add_argument('--epochs', default=500, type=int, help='Upstream 1000 epochs, Downstream 500 epochs')
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='start epoch')
     parser.add_argument('--warmup-epochs', type=int, default=10, metavar='N', help='epochs to warmup LR, if scheduler supports')
     parser.add_argument('--lr', type=float, default=5e-4, metavar='LR', help='learning rate (default: 5e-4)')
     parser.add_argument('--min-lr', type=float, default=1e-5, metavar='LR', help='lower lr bound for cyclic schedulers that hit 0 (1e-5)')
     
     # Setting Upstream, Downstream task
-    parser.add_argument('--training-stream', default='Upstream', choices=['Upstream', 'Downstream'], type=str, help='training stream')  
+    parser.add_argument('--training-stream', default='Downstream', choices=['Upstream', 'Downstream'], type=str, help='training stream')  
 
     # DataParrel or Single GPU train
-    parser.add_argument('--multi-gpu-mode',       default='DataParallel', choices=['DataParallel', 'Single'], type=str, help='multi-gpu-mode')          
+    parser.add_argument('--multi-gpu-mode',       default='Single', choices=['DataParallel', 'Single'], type=str, help='multi-gpu-mode')
     parser.add_argument('--device',               default='cuda', help='device to use for training / testing')
     parser.add_argument('--cuda-device-order',    default='PCI_BUS_ID', type=str, help='cuda_device_order')
-    parser.add_argument('--cuda-visible-devices', default='0', type=str, help='cuda_visible_devices')
+    parser.add_argument('--cuda-visible-devices', default='2', type=str, help='cuda_visible_devices')
 
     # Option
-    parser.add_argument('--gradual-unfreeze',    type=str2bool, default="TRUE", help='gradual unfreezing the encoder for Downstream Task')
+    parser.add_argument('--gradual_unfreeze',    type=str2bool, default="true", help='gradual unfreezing the encoder for Downstream Task')
 
     # Continue Training
     parser.add_argument('--resume',           default='',  help='resume from checkpoint')  # '' = None
@@ -72,8 +74,9 @@ def get_args_parser():
     parser.add_argument('--print-freq', default=10, type=int, metavar='N', help='print frequency (default: 10)')
     
     # Prediction and Save setting
-    parser.add_argument('--checkpoint-dir', default='', help='path where to save checkpoint or output')
-    parser.add_argument('--png-save-dir',   default='', help='path where to prediction PNG save')
+    parser.add_argument('--output_dir', default='outputs', help='path where to save, empty for no saving')
+    # parser.add_argument('--checkpoint-dir', default='', help='path where to save checkpoint or output')
+    # parser.add_argument('--png-save-dir',   default='', help='path where to prediction PNG save')
 
     return parser
 
@@ -101,13 +104,13 @@ def main(args):
     
     data_loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True,  pin_memory=args.pin_mem, drop_last=True,  collate_fn=collate_fn_train)
     data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=collate_fn_valid)
-    # data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=1,               num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=collate_fn_train)
 
     # Select Loss
     if args.training_stream == 'Upstream':
         criterion = Uptask_Loss(model_name=args.model_name)
     elif args.training_stream == 'Downstream':
         criterion = Downtask_Loss(model_name=args.model_name)
+        # print(criterion)
     else: 
         raise Exception('Error...! args.training_stream')
 
@@ -136,7 +139,7 @@ def main(args):
             val_loss_list = []
             for l in lines:
                 exec('log_dict='+l.replace('NaN', '0'))
-                val_loss_list.append(log_dict['valid_loss'])
+                # val_loss_list.append(log_dict['valid_loss']) ### 뭐고??
             print("Epoch: ", np.argmin(val_loss_list), " Minimum Val Loss ==> ", np.min(val_loss_list))
         except:
             pass
@@ -206,36 +209,49 @@ def main(args):
                 valid_stats = valid_Uptask_Unsup_AE(model, criterion, data_loader_valid, device, epoch, args.print_freq, args.png_save_dir, args.batch_size)
                 print("Averaged valid_stats: ", valid_stats)
 
-            elif args.model_name == 'Uptask_Unsup_ModelGenesis':
-                train_stats = train_Uptask_Unsup(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
+            # elif args.model_name == 'Uptask_Unsup_ModelGenesis':
+            #     train_stats = train_Uptask_Unsup(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
 
             else : 
                 raise Exception('Error...! args.training_mode')    
 
         # Need for Customizing ... !
         elif args.training_stream == 'Downstream':
-            if args.model_name == 'Down_General_Fracture':
-                train_stats = train_Downtask_General_Fracture(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
+            if args.model_name == 'Downtask_General_Fracture':
+                train_stats = train_Downtask_General_Fracture(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size, args.gradual_unfreeze)
                 print("Averaged train_stats: ", train_stats)
                 valid_stats = valid_Downtask_General_Fracture(model, criterion, data_loader_valid, device, args.print_freq, args.batch_size)
                 print("Averaged valid_stats: ", valid_stats)
+            
+            elif args.model_name == 'Downtask_RSNA_Boneage':
+                train_stats = train_Downtask_RSNA_BAA(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size, args.gradual_unfreeze)
+                print("Averaged train_stats: ", train_stats)
+                valid_stats = valid_Downtask_RSNA_BAA(model, criterion, data_loader_valid, device, args.print_freq, args.batch_size)
+                print("Averaged valid_stats: ", valid_stats)
 
+            elif args.model_name == 'Downtask_Pneumonia':
+                train_stats = train_Downtask_Pneumonia(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size, args.gradual_unfreeze)
+                print("Averaged train_stats: ", train_stats)
+                valid_stats = valid_Downtask_Pneumonia(model, criterion, data_loader_valid, device, args.print_freq, args.batch_size)
+                print("Averaged valid_stats: ", valid_stats)
+            
             else : 
-                raise Exception('Error...! args.training_mode')    
+                raise Exception('Error...! args.model_name')    
 
         else :
             raise Exception('Error...! args.training_stream')    
 
           
         # Save & Prediction png
-        checkpoint_paths = args.checkpoint_dir + '/epoch_' + str(epoch) + '_checkpoint.pth'
+        save_name = 'epoch_' + str(epoch) + '_checkpoint.pth'
+        checkpoint_path = args.output_dir + '/' +str(save_name)
         torch.save({
             'model_state_dict': model.state_dict() if args.multi_gpu_mode == 'Single' else model.module.state_dict(),
             'optimizer': optimizer.state_dict(),
             'lr_scheduler': lr_scheduler.state_dict(),
             'epoch': epoch,
             'args': args,
-        }, checkpoint_paths)
+        }, checkpoint_path)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                     **{f'valid_{k}': v for k, v in valid_stats.items()},
