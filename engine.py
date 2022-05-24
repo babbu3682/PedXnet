@@ -748,7 +748,7 @@ def train_Downtask_RSNA_BAA(model, criterion, data_loader, optimizer, device, ep
         
         inputs  = batch_data["image"].float().to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
         cls_gt  = batch_data["label"].float().to(device)     #                 ---> (B, 1)
-        gender  = batch_data['gender'].float().to(device)
+        gender  = batch_data['gender'].to(device)
         
         cls_pred = model(inputs, gender)
 
@@ -779,7 +779,7 @@ def valid_Downtask_RSNA_BAA(model, criterion, data_loader, device, print_freq, b
         
         inputs  = batch_data["image"].float().to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
         cls_gt  = batch_data["label"].float().to(device)   #                 ---> (B, 1)
-        gender  = batch_data['gender'].float().to(device) 
+        gender  = batch_data['gender'].to(device) 
 
         cls_pred = model(inputs, gender)
 
@@ -812,7 +812,7 @@ def test_Downtask_RSNA_BAA(model, criterion, data_loader, device, print_freq, ba
         
         inputs  = batch_data["image"].float().to(device)     # (B, C, H, W, D)
         cls_gt  = batch_data["label"].float().to(device)     #  ---> (B, 1)
-        gender  = batch_data['gender'].float().to(device) 
+        gender  = batch_data['gender'].to(device) 
 
         cls_pred = model(inputs, gender)
 
