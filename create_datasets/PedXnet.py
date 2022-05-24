@@ -37,7 +37,6 @@ def get_pixels_hu(path):
         image  = apply_modality_lut(image, dcm_image)        
     except:
         image = image.astype(np.int16)
-        
         intercept = dcm_image.RescaleIntercept
         slope     = dcm_image.RescaleSlope
 
@@ -96,11 +95,13 @@ def Supervised_16Class(mode, data_folder_dir='/home/pkg777774/child_x-ray/fractu
             AddChanneld(keys=["image"]),              
 
             # (45 degree rotation, vertical & horizontal flip & scaling)
+            RandRotate90d(keys=["n_20", "n_100"], prob=0.1, spatial_axes=[0, 1], allow_missing_keys=False),
             RandFlipd(keys=["image"], prob=0.1, spatial_axis=[0, 1], allow_missing_keys=False),
+
             RandRotate90d(keys=["image"], prob=0.1, spatial_axes=[0, 1], allow_missing_keys=False), # 추가
             RandRotated(keys=["image"], prob=0.1, range_x=np.pi/12, range_y=np.pi/12, range_z=0.0, keep_size=True, align_corners=False, allow_missing_keys=False),
             RandZoomd(keys=["image"], prob=0.1, min_zoom=0.9, max_zoom=1.1, align_corners=None, keep_size=True, allow_missing_keys=False), # min : 0.5 -> 0.9, max : 2 -> 1.1 수정
-    
+
             # Normalize
             Lambdad(keys=["image"], func=functools.partial(minmax_normalize, option=False)),                  
             ToTensord(keys=["image"]),

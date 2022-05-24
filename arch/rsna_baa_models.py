@@ -3,7 +3,6 @@ import torch.nn as nn
 from torch import Tensor
 from arch.sunggu_resnet import ResNet, Bottleneck
 
-
 class ResNet_Feature_Extractor(ResNet):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -35,8 +34,8 @@ class RSNA_BAA_Model(nn.Module):
     def __init__(self):
         super(RSNA_BAA_Model, self).__init__()
         
-        self.encoder = ResNet_Feature_Extractor(block=Bottleneck, layers=[3, 4, 6, 3])
 
+        self.encoder = ResNet_Feature_Extractor(block=Bottleneck, layers=[3, 4, 6, 3])
         self.pool  = nn.AdaptiveAvgPool2d(1)
         
         self.fc1   = nn.Linear(2048+1, 1024)  # +1 is for gender.
