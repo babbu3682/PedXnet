@@ -4,7 +4,13 @@ We proposed a Pediatric radiographs' representation transfer learning network ca
 
 
 ## 💡 Highlights
-+ ⏳ It's scheduled to be uploaded soon.
+
++ Three class-balanced pediatric radiograph datasets (PedXnets) by radiographic views labeling have been constructed.
+
++ Robust representation was developed by a radiographic views recognition task on the PedXnets.
+
++ Radiographic view representations using Model-PedXNets have been validated by applying them to two pediatric medical tasks, which showed better performance than Model-Baseline, and even equivalent and better performance than Model-ImageNet.
+
 
 
 <p align="center"><img width="100%" src="figures/ModelPedXnet-7Class.png" /></p>
