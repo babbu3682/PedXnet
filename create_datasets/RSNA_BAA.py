@@ -129,7 +129,7 @@ def RSNA_BAA_Dataset(mode, data_folder_dir="/mnt/nas125_vol2/kanggilpark/child/b
             # Just png Load
             Lambdad(keys=["image"], func=get_png),
             Lambdad(keys=["image"], func=functools.partial(resize_and_padding_with_aspect_clahe, spatial_size=(256, 256))),                                       
-            AddChanneld(keys=["image" "label", "gender"]),           
+            AddChanneld(keys=["image", "label", "gender"]),          
 
             # Normalize
             Lambdad(keys=["image"], func=functools.partial(minmax_normalize, option=False)),                  
