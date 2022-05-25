@@ -62,7 +62,7 @@ def dicom_resize_and_padding_with_aspect(image, spatial_size):
     return image
 
 def add_img_path(x):
-    path = x.replace('/workspace/data/', '/home/pkg777774/child_x-ray/Cleansing_X-Ray/')  # 경로 변경 
+    path = x.replace('/workspace/data/', '/home/pkg777774/child_xray/Cleansing_X-Ray/')  # 경로 변경 
     return path
 
 def label_class(x):
@@ -85,7 +85,7 @@ def default_collate_fn(batch):
     batch = list(filter(lambda x: torch.isnan(x['image'].max()).item() == False, batch))
     return torch.utils.data.dataloader.default_collate(batch)
 
-def Supervised_16Class(mode, data_folder_dir='/home/pkg777774/child_x-ray/fracture/jykim'):
+def Supervised_16Class(mode, data_folder_dir='/home/pkg777774/child_xray/fracture/jykim'):
     train_transforms = Compose(
         [
             # Just dicom Load
@@ -95,9 +95,7 @@ def Supervised_16Class(mode, data_folder_dir='/home/pkg777774/child_x-ray/fractu
             AddChanneld(keys=["image"]),              
 
             # (45 degree rotation, vertical & horizontal flip & scaling)
-            RandRotate90d(keys=["n_20", "n_100"], prob=0.1, spatial_axes=[0, 1], allow_missing_keys=False),
             RandFlipd(keys=["image"], prob=0.1, spatial_axis=[0, 1], allow_missing_keys=False),
-
             RandRotate90d(keys=["image"], prob=0.1, spatial_axes=[0, 1], allow_missing_keys=False), # 추가
             RandRotated(keys=["image"], prob=0.1, range_x=np.pi/12, range_y=np.pi/12, range_z=0.0, keep_size=True, align_corners=False, allow_missing_keys=False),
             RandZoomd(keys=["image"], prob=0.1, min_zoom=0.9, max_zoom=1.1, align_corners=None, keep_size=True, allow_missing_keys=False), # min : 0.5 -> 0.9, max : 2 -> 1.1 수정
@@ -138,7 +136,7 @@ def Supervised_16Class(mode, data_folder_dir='/home/pkg777774/child_x-ray/fractu
 
     return Dataset(data=data_dicts, transform=transform_combination), default_collate_fn
 
-def Supervised_16Class_TEST(data_folder_dir='/home/pkg777774/child_x-ray/fracture/jykim'):
+def Supervised_16Class_TEST(data_folder_dir='/home/pkg777774/child_xray/fracture/jykim'):
     valid_transforms = Compose(
         [
             # Just dicom Load

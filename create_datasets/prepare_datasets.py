@@ -5,7 +5,6 @@ from create_datasets.PedXnet import *
 # Downtask
 from create_datasets.General_Fracture import *
 from create_datasets.RSNA_BAA import *
-from create_datasets.PedXnet import *
 from create_datasets.Pneumonia import *
 
 
@@ -36,7 +35,7 @@ def build_test_dataset(args):
 
     # Upstream
     if args.data_set == 'PedXnet_Sup_16class':
-        dataset, collate_fn = Supervised_16Class()
+        dataset, collate_fn = Supervised_16Class(data_folder_dir=args.data_folder_dir)
 
     # Downstream
     elif args.data_set == 'General_Fracture':

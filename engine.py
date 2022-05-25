@@ -56,12 +56,13 @@ def train_Uptask_Sup(model, criterion, data_loader, optimizer, device, epoch, pr
     
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
-        cls_gt  = batch_data["label"].to(device)   # (B, 1)
+        inputs  = batch_data["image"].float().to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
+        cls_gt  = batch_data["label"].long().to(device)   # (B, 1)
         
         cls_pred = model(inputs)
         
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
+        loss, loss_detail = criterion(pred=cls_pred, gt=cls_gt)
+        loss[loss != loss] = 1e-6 ## nan loss 방지 확인점요
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
@@ -88,12 +89,13 @@ def valid_Uptask_Sup(model, criterion, data_loader, device, print_freq, batch_si
 
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
-        cls_gt  = batch_data["label"].to(device)   # (B, 1)
+        inputs  = batch_data["image"].float().to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
+        cls_gt  = batch_data["label"].long().to(device)   # (B, 1)
 
         cls_pred = model(inputs)
 
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
+        loss, loss_detail = criterion(pred=cls_pred, gt=cls_gt)
+        loss[loss != loss] = 1e-6 ## nan loss 방지 확인점요
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
@@ -128,12 +130,13 @@ def test_Uptask_Sup(model, criterion, data_loader, device, print_freq, batch_siz
     
     for batch_data in metric_logger.log_every(data_loader, print_freq, header):
         
-        inputs  = batch_data["image"].to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
-        cls_gt  = batch_data["label"].to(device)   # (B, 1)
+        inputs  = batch_data["image"].float().to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
+        cls_gt  = batch_data["label"].long().to(device)   # (B, 1)
 
         cls_pred = model(inputs)
             
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
+        loss, loss_detail = criterion(pred=cls_pred, gt=cls_gt)
+        loss[loss != loss] = 1e-6 ## nan loss 방지 확인점요
         loss_value = loss.item()
 
         if not math.isfinite(loss_value):
