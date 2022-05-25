@@ -3,7 +3,7 @@ import torch.nn as nn
 
 # UpTask
     # Supervised Model  
-# from arch.sunggu_resnet import resnet50
+from arch.sunggu_resnet import resnet50
 from arch.sunggu_autoencoder import Resnet_AutoEncoder
 from arch.general_fracture_models import General_Fracture_Model
 from arch.rsna_baa_models import *
@@ -65,8 +65,7 @@ def create_model(stream, name):
     if stream == 'Upstream':
         # Ours
         if name == 'Uptask_Sup_Classifier':
-            # model = Supervised_Classifier_Model(pretrained)
-            pass
+            model = resnet50(pretrained=False, num_classes=16)
         
         # Previous works
         elif name == 'Uptask_Unsup_AutoEncoder':

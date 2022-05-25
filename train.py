@@ -274,8 +274,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('PedXNet training and evaluation script', parents=[get_args_parser()])
     args   = parser.parse_args()
 
-    if args.checkpoint_dir:
-        Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         
     os.environ["CUDA_DEVICE_ORDER"]     =  args.cuda_device_order
     os.environ["CUDA_VISIBLE_DEVICES"]  =  args.cuda_visible_devices        
