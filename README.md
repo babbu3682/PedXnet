@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # PedXnet - Official Pytorch Implementation
 
 We proposed a Pediatric radiographs' representation transfer learning network called <b>PedXnet</b>.
@@ -267,6 +268,10 @@ This is a patent-pending technology.
 
 ### 🛡️ License <a name="license"></a>
 Project is distributed under [MIT License](https://github.com/babbu3682/PedXnet_Code_Factory/blob/main/LICENSE)
+=======
+# PedXnet_Code_Factory
+ code factory
+>>>>>>> parent of 45c5ed3... update
 =======
 # PedXnet_Code_Factory
  code factory
