@@ -1,82 +1,63 @@
 import os
 import argparse
 import datetime
-import numpy as np
 import time
-import torch
-import random
 import json
-from pathlib import Path
-
+import random
+import torch
+import numpy as np
 import utils
-from create_model import create_model
-from create_datasets.prepare_datasets import build_dataset
-
-from engine import *
-from losses import Uptask_Loss, Downtask_Loss
-from optimizers import create_optim
-from lr_schedulers import create_scheduler
-from losses import Uptask_Loss, Downtask_Loss
+from dataloaders_train import get_train_dataloader
+from models import get_model
+from schedulers import get_scheduler
+from optimizers import get_optimizer
+from losses import get_loss
 from engine import *
 
-def str2bool(v):
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('PedXNet Deep-Learning Train and Evaluation script', add_help=False)
+    parser = argparse.ArgumentParser('PedXNet Deep-Learning Train script', add_help=False)
 
     # Dataset parameters
-    parser.add_argument('--data_set', default='General_Fracture', choices=['PedXnet_Sup_16class', 'General_Fracture', 'RSNA_BAA', 'Pneumonia'], type=str, help='dataset name')  
-    parser.add_argument('--data_folder_dir', default="/mnt/nas125_vol2/kanggilpark/child/PedXnet_Code_Factory/datasets", type=str, help='dataset folder dirname')
+    parser.add_argument('--dataset',               default="amc", type=str, help='dataset name')
+    parser.add_argument('--train-batch-size',      default=72, type=int)
+    parser.add_argument('--valid-batch-size',      default=72, type=int)
+    parser.add_argument('--train-num-workers',     default=10, type=int)
+    parser.add_argument('--valid-num-workers',     default=10, type=int)
 
     # Model parameters
-    parser.add_argument('--model_name',      default='Downtask_General_Fracture',  type=str, help='model name')
-
-    # DataLoader setting
-    parser.add_argument('--batch-size',  default=72, type=int)
-    parser.add_argument('--num_workers', default=8, type=int)
-    parser.add_argument('--pin-mem',    action='store_true', default=True, help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
+    parser.add_argument('--model',                 default='Sequence_SkipHidden_Unet_ALL',  type=str, help='model name')    
+    parser.add_argument('--loss',                  default='Sequence_SkipHidden_Unet_loss', type=str, help='loss name')    
+    parser.add_argument('--method',                default='', help='multi-task weighting name')
 
     # Optimizer parameters
-    parser.add_argument('--optimizer', default='adamw', type=str, metavar='OPTIMIZER', help='Optimizer (default: "adamw"')
-
-    # Learning rate and schedule and Epoch parameters
-    parser.add_argument('--lr-scheduler', default='poly_lr', type=str, metavar='lr_scheduler', help='lr_scheduler (default: "poly_learning_rate"')
-    parser.add_argument('--epochs', default=500, type=int, help='Upstream 1000 epochs, Downstream 500 epochs')
-    parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='start epoch')
-    parser.add_argument('--warmup-epochs', type=int, default=10, metavar='N', help='epochs to warmup LR, if scheduler supports')
-    parser.add_argument('--lr', type=float, default=5e-4, metavar='LR', help='learning rate (default: 5e-4)')
-    parser.add_argument('--min-lr', type=float, default=1e-5, metavar='LR', help='lower lr bound for cyclic schedulers that hit 0 (1e-5)')
+    parser.add_argument('--optimizer',             default='adamw', type=str, metavar='OPTIMIZER', help='Optimizer (default: "AdamW"')
     
-    # Setting Upstream, Downstream task
-    parser.add_argument('--training-stream', default='Downstream', choices=['Upstream', 'Downstream'], type=str, help='training stream')  
+    # Learning rate and schedule and Epoch parameters
+    parser.add_argument('--scheduler',             default='poly_lr', type=str, metavar='scheduler', help='scheduler (default: "poly_learning_rate"')
+    parser.add_argument('--epochs',                default=1000, type=int, help='Upstream 1000 epochs, Downstream 500 epochs')  
+    parser.add_argument('--warmup-epochs',         default=10, type=int, metavar='N', help='epochs to warmup LR, if scheduler supports')
+    parser.add_argument('--lr',                    default=5e-4, type=float, metavar='LR', help='learning rate (default: 5e-4)')
+    parser.add_argument('--min-lr',                default=1e-5, type=float, metavar='LR', help='lower lr bound for cyclic schedulers that hit 0 (1e-5)')
 
     # DataParrel or Single GPU train
-    parser.add_argument('--multi-gpu-mode',       default='Single', choices=['DataParallel', 'Single'], type=str, help='multi-gpu-mode')
-    parser.add_argument('--device',               default='cuda', help='device to use for training / testing')
-    parser.add_argument('--cuda-device-order',    default='PCI_BUS_ID', type=str, help='cuda_device_order')
-    parser.add_argument('--cuda-visible-devices', default='2', type=str, help='cuda_visible_devices')
-
-    # Option
-    parser.add_argument('--gradual_unfreeze',    type=str2bool, default="true", help='gradual unfreezing the encoder for Downstream Task')
-
-    # Continue Training
-    parser.add_argument('--resume',           default='',  help='resume from checkpoint')  # '' = None
-    parser.add_argument('--from-pretrained',  default='',  help='pre-trained from checkpoint')
-    parser.add_argument('--load-weight-type', default='',  help='the types of loading the pre-trained weights')
+    parser.add_argument('--multi-gpu-mode',        default='DataParallel', choices=['Single', 'DataParallel'], type=str, help='multi-gpu-mode')          
+    parser.add_argument('--device',                default='cuda', help='device to use for training / testing')
     
     # Validation setting
-    parser.add_argument('--print-freq', default=10, type=int, metavar='N', help='print frequency (default: 10)')
-    
+    parser.add_argument('--print-freq',            default=10, type=int, metavar='N', help='print frequency (default: 10)')
+    parser.add_argument('--save-checkpoint-every', default=1,  type=int, help='save the checkpoints every n epochs')  
+
     # Prediction and Save setting
-    parser.add_argument('--output_dir', default='outputs', help='path where to save, empty for no saving')
-    # parser.add_argument('--checkpoint-dir', default='', help='path where to save checkpoint or output')
-    # parser.add_argument('--png-save-dir',   default='', help='path where to prediction PNG save')
+    parser.add_argument('--checkpoint-dir',        default='', help='path where to save checkpoint or output')
+    parser.add_argument('--save-dir',              default='', help='path where to prediction PNG save')
+
+    # Continue Training
+    parser.add_argument('--from-pretrained',       default='',  help='pre-trained from checkpoint')
+    parser.add_argument('--resume',                default='',  help='resume from checkpoint')  # '' = None
+
+    # Memo
+    parser.add_argument('--memo',                  default='', help='memo for script')
 
     return parser
 
@@ -94,190 +75,114 @@ random.seed(random_seed)
 
 
 def main(args):
-    
+    start_epoch = 0
     utils.print_args(args)
     device = torch.device(args.device)
-
-    print("Loading dataset ....")
-    dataset_train, collate_fn_train = build_dataset(is_train=True,  args=args)   
-    dataset_valid, collate_fn_valid = build_dataset(is_train=False, args=args)
+    print("cpu == ", os.cpu_count())
     
-    data_loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True,  pin_memory=args.pin_mem, drop_last=True,  collate_fn=collate_fn_train)
-    data_loader_valid = torch.utils.data.DataLoader(dataset_valid, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=args.pin_mem, drop_last=False, collate_fn=collate_fn_valid)
+    # Dataloader
+    train_loader, valid_loader = get_train_dataloader(name=args.dataset, args=args)
 
-    # Select Loss
-    if args.training_stream == 'Upstream':
-        criterion = Uptask_Loss(model_name=args.model_name)
-    elif args.training_stream == 'Downstream':
-        criterion = Downtask_Loss(model_name=args.model_name)
-        # print(criterion)
-    else: 
-        raise Exception('Error...! args.training_stream')
+    # Model
+    model = get_model(name=args.model)
 
-    # Select Model
-    print(f"Creating model  : {args.model_name}")
-    print(f"Pretrained model: {args.from_pretrained}")
-    model = create_model(stream=args.training_stream, name=args.model_name)
-    print(model)
+    # Pretrained
+    if args.from_pretrained:
+        print("Loading... Pretrained")
+        checkpoint = torch.load(args.from_pretrained)
+        model.load_state_dict(checkpoint['model_state_dict'])
 
+    # Multi-GPU & CUDA
+    if args.multi_gpu_mode == 'DataParallel':
+        model = torch.nn.DataParallel(model)
+        model = model.to(device)
+    else :
+        model = model.to(device)
 
-    # Optimizer & LR Scheduler
-    optimizer    = create_optim(name=args.optimizer, model=model, args=args)
-    lr_scheduler = create_scheduler(name=args.lr_scheduler, optimizer=optimizer, args=args)
-    
+    # Optimizer & LR Schedule & Loss
+    optimizer = get_optimizer(name=args.optimizer, model=model, lr=args.lr)
+    scheduler = get_scheduler(name=args.scheduler, optimizer=optimizer, warm_up_epoch=args.warmup_epochs, start_decay_epoch=args.epochs/10, total_epoch=args.epochs, min_lr=1e-6)
+    criterion = get_loss(name=args.loss)
+
     # Resume
     if args.resume:
         print("Loading... Resume")
         checkpoint = torch.load(args.resume, map_location='cpu')
-        model.load_state_dict(checkpoint['model_state_dict'])        
+        checkpoint['model_state_dict'] = {k.replace('.module', ''):v for k,v in checkpoint['model_state_dict'].items()} # fix loading multi-gpu 
+        model.load_state_dict(checkpoint['model_state_dict'])   
+        start_epoch = checkpoint['epoch'] + 1 
         optimizer.load_state_dict(checkpoint['optimizer'])
-        lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])        
-        args.start_epoch = checkpoint['epoch'] + 1  
-        try:
-            log_path = os.path.dirname(args.resume)+'/log.txt'
-            lines    = open(log_path,'r').readlines()
-            val_loss_list = []
-            for l in lines:
-                exec('log_dict='+l.replace('NaN', '0'))
-                # val_loss_list.append(log_dict['valid_loss']) ### 뭐고??
-            print("Epoch: ", np.argmin(val_loss_list), " Minimum Val Loss ==> ", np.min(val_loss_list))
-        except:
-            pass
+        scheduler.load_state_dict(checkpoint['scheduler'])
+        utils.fix_optimizer(optimizer) 
 
-        # Optimizer Error fix...!
-        for state in optimizer.state.values():
-            for k, v in state.items():
-                if torch.is_tensor(v):
-                    state[k] = v.cuda()
-
-
-    # Using the pre-trained feature extract's weights
-    if args.from_pretrained:
-        # ImageNet pre-trained from torchvision, Reference: https://github.com/pytorch/vision
-        if args.from_pretrained.split('/')[-1] == '[UpTASK]ResNet50_ImageNet.pth':
-            print("Loading... Pre-trained")      
-            model_dict = model.state_dict() 
-            print("Check Before weight = ", model_dict['encoder.conv1.weight'].std().item())
-            checkpoint_state_dict = torch.load(args.from_pretrained, map_location='cpu')
-            checkpoint_state_dict['conv1.weight'] = checkpoint_state_dict['conv1.weight'].sum(1, keepdim=True)   # ImageNet pre-trained is 3ch, so we have to change to 1 ch (using sum weight) Reference: https://github.com/qubvel/segmentation_models.pytorch/blob/master/segmentation_models_pytorch/encoders/_utils.py#L27
-            corrected_dict = {'encoder.'+k: v for k, v in checkpoint_state_dict.items()}
-            filtered_dict  = {k: v for k, v in corrected_dict.items() if (k in model_dict) and ('encoder.' in k)}
-            model_dict.update(filtered_dict)             
-            model.load_state_dict(model_dict)   
-            print("Check After weight  = ", model.state_dict()['encoder.conv1.weight'].std().item())
-        else :
-            print("Loading... Pre-trained")      
-            model_dict = model.state_dict() 
-            print("Check Before weight = ", model_dict['encoder.conv1.weight'].std().item())
-            checkpoint = torch.load(args.from_pretrained, map_location='cpu')
-            if args.load_weight_type == 'full':
-                model.load_state_dict(checkpoint['model_state_dict'])   
-            elif args.load_weight_type == 'encoder':
-                filtered_dict = {k: v for k, v in checkpoint['model_state_dict'].items() if (k in model_dict) and ('encoder.' in k)}
-                model_dict.update(filtered_dict)             
-                model.load_state_dict(model_dict)   
-            print("Check After weight  = ", model.state_dict()['encoder.conv1.weight'].std().item())
-
-
-    # Multi GPU
-    if args.multi_gpu_mode == 'DataParallel':
-        model = torch.nn.DataParallel(model)
-        model.to(device)
-    elif args.multi_gpu_mode == 'Single':
-        model.to(device)
-    else :
-        raise Exception('Error...! args.multi_gpu_mode')    
-
-    # Etc training setting
+    # Etc traing setting
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
 
-    # Whole LOOP Train & Valid 
-    for epoch in range(args.start_epoch, args.epochs):
+    # Whole Loop Train & Valid 
+    for epoch in range(start_epoch, args.epochs):
 
-        # Train & Valid
-        if args.training_stream == 'Upstream':
-            if args.model_name == 'Uptask_Sup_Classifier':
-                train_stats = train_Uptask_Sup(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
-                print("Averaged train_stats: ", train_stats)
-                valid_stats = valid_Uptask_Sup(model, criterion, data_loader_valid, device, args.num_class, args.print_freq, args.batch_size)
-                print("Averaged valid_stats: ", valid_stats)
+        # Upstream
+        if args.model == 'Uptask_Sup_Classifier':
+            train_stats = train_Uptask_Sup(train_loader, model, criterion, optimizer, device, epoch)
+            print("Averaged train_stats: ", train_stats)
+            valid_stats = valid_Uptask_Sup(valid_loader, model, device, epoch)
+            print("Averaged valid_stats: ", valid_stats)
 
-            elif args.model_name == 'Uptask_Unsup_AutoEncoder':
-                train_stats = train_Uptask_Unsup_AE(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
-                print("Averaged train_stats: ", train_stats)
-                valid_stats = valid_Uptask_Unsup_AE(model, criterion, data_loader_valid, device, epoch, args.print_freq, args.png_save_dir, args.batch_size)
-                print("Averaged valid_stats: ", valid_stats)
-
-            # elif args.model_name == 'Uptask_Unsup_ModelGenesis':
-            #     train_stats = train_Uptask_Unsup(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size)
-
-            else : 
-                raise Exception('Error...! args.training_mode')    
-
-        # Need for Customizing ... !
-        elif args.training_stream == 'Downstream':
-            if args.model_name == 'Downtask_General_Fracture':
-                train_stats = train_Downtask_General_Fracture(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size, args.gradual_unfreeze)
-                print("Averaged train_stats: ", train_stats)
-                valid_stats = valid_Downtask_General_Fracture(model, criterion, data_loader_valid, device, args.print_freq, args.batch_size)
-                print("Averaged valid_stats: ", valid_stats)
-            
-            elif args.model_name == 'Downtask_RSNA_Boneage':
-                train_stats = train_Downtask_RSNA_BAA(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size, args.gradual_unfreeze)
-                print("Averaged train_stats: ", train_stats)
-                valid_stats = valid_Downtask_RSNA_BAA(model, criterion, data_loader_valid, device, args.print_freq, args.batch_size)
-                print("Averaged valid_stats: ", valid_stats)
-
-            elif args.model_name == 'Downtask_Pneumonia':
-                train_stats = train_Downtask_Pneumonia(model, criterion, data_loader_train, optimizer, device, epoch, args.print_freq, args.batch_size, args.gradual_unfreeze)
-                print("Averaged train_stats: ", train_stats)
-                valid_stats = valid_Downtask_Pneumonia(model, criterion, data_loader_valid, device, args.print_freq, args.batch_size)
-                print("Averaged valid_stats: ", valid_stats)
-            
-            else : 
-                raise Exception('Error...! args.model_name')    
-
-        else :
-            raise Exception('Error...! args.training_stream')    
-
-          
-        # Save & Prediction png
-        save_name = 'epoch_' + str(epoch) + '_checkpoint.pth'
-        checkpoint_path = args.output_dir + '/' +str(save_name)
-        torch.save({
-            'model_state_dict': model.state_dict() if args.multi_gpu_mode == 'Single' else model.module.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'lr_scheduler': lr_scheduler.state_dict(),
-            'epoch': epoch,
-            'args': args,
-        }, checkpoint_path)
-
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                    **{f'valid_{k}': v for k, v in valid_stats.items()},
-                    'epoch': epoch}
+        # Downstream
+        elif args.model == 'Downtask_General_Fracture' or args.model == 'Downtask_General_Fracture_ImageNet' or args.model == 'Downtask_General_Fracture_PedXNet_7Class' or args.model == 'Downtask_General_Fracture_PedXNet_30Class' or args.model == 'Downtask_General_Fracture_PedXNet_68Class':
+            train_stats = train_Downtask_General_Fracture(train_loader, model, criterion, optimizer, device, epoch)
+            print("Averaged train_stats: ", train_stats)
+            valid_stats = valid_Downtask_General_Fracture(valid_loader, model, device, epoch)
+            print("Averaged valid_stats: ", valid_stats)
         
-        if args.checkpoint_dir:
-            with open(args.checkpoint_dir + "/log.txt", "a") as f:
-                f.write(json.dumps(log_stats) + "\n")
+        elif args.model == 'Downtask_RSNA_Boneage':
+            train_stats = train_Downtask_RSNA_BAA(train_loader, model, criterion, optimizer, device, epoch)
+            print("Averaged train_stats: ", train_stats)
+            valid_stats = valid_Downtask_RSNA_BAA(valid_loader, model, device, epoch)
+            print("Averaged valid_stats: ", valid_stats)
 
-        lr_scheduler.step(epoch)
+        else : 
+            raise Exception('Error...! args.model')    
 
+        # LR scheduler update
+        scheduler.step(epoch)         
+
+        # Save checkpoint & Prediction png
+        if epoch % args.save_checkpoint_every == 0:
+            checkpoint_path = args.checkpoint_dir + '/epoch_' + str(epoch) + '_checkpoint.pth'
+            torch.save({
+                'model_state_dict': model.module.state_dict() if hasattr(model, 'module') else model.state_dict(),  # Save only Single Gpu mode
+                'optimizer': optimizer.state_dict(), 
+                'scheduler': scheduler.state_dict(), 
+                'epoch': epoch,
+                'args': args,
+            }, checkpoint_path)               
+
+        # Log & Save
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                     **{f'valid_{k}': v for k, v in valid_stats.items()},
+                     'epoch': epoch}
+        
+        with open(args.checkpoint_dir + "/log.txt", "a") as f:
+            f.write(json.dumps(log_stats) + "\n")
 
     # Finish
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    total_time_str = str(datetime.timedelta(seconds=int(time.time()-start_time)))
     print('Training time {}'.format(total_time_str))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('PedXNet training and evaluation script', parents=[get_args_parser()])
-    args   = parser.parse_args()
+    args = parser.parse_args()
 
-    if args.output_dir:
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        
-    os.environ["CUDA_DEVICE_ORDER"]     =  args.cuda_device_order
-    os.environ["CUDA_VISIBLE_DEVICES"]  =  args.cuda_visible_devices        
+    # Make folder if not exist
+    os.makedirs(args.checkpoint_dir + "/args", mode=0o777, exist_ok=True)
+    os.makedirs(args.save_dir, mode=0o777, exist_ok=True)
     
+    # Save args to json
+    if not os.path.isfile(args.checkpoint_dir + "/args/args_" + datetime.datetime.now().strftime("%y%m%d_%H%M") + ".json"):
+        with open(args.checkpoint_dir + "/args/args_" + datetime.datetime.now().strftime("%y%m%d_%H%M") + ".json", "w") as f:
+            json.dump(args.__dict__, f, indent=2)
+
     main(args)

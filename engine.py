@@ -1,16 +1,21 @@
 import os
 import math
 import utils
-import torch
-import torch.nn.functional as F
-import torchvision
 import numpy as np
+import torch
 import cv2
+import skimage
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from pathlib import Path
-from metrics import *
+import pandas as pd
+from tqdm import tqdm
+
+from metrics import f1_metric, accuracy, sensitivity, specificity, calculate_ppv_npv
+from sklearn.metrics import roc_auc_score, r2_score, mean_absolute_error, mean_squared_error
+from monai.visualize import GradCAM
 
 
+fn_tonumpy = lambda x: x.detach().cpu().numpy()
 
 def freeze_params(model: torch.nn.Module):
     """Set requires_grad=False for each of model.parameters()"""
@@ -22,7 +27,6 @@ def unfreeze_params(model: torch.nn.Module):
     for par in model.parameters():
         par.requires_grad = True
 
-fn_tonumpy = lambda x: x.cpu().detach().numpy().transpose(0, 2, 3, 1)
 
 activation = {}
 def get_activation(name):
@@ -46,125 +50,126 @@ def Activation_Map(x):
     return mean
 
 
-# Uptask Task
-    # Supervised 
-def train_Uptask_Sup(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size):
-    model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
+# Uptask Task - Supervised 
+def train_Uptask_Sup(train_loader, model, criterion, optimizer, device, epoch):
+    model.train()
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(train_loader))
     
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+    for step, batch_data in enumerate(epoch_iterator):
+
+        image, label = batch_data
+        image = image.to(device)
+        label = label.to(device)
+
+        pred = model(image)
         
-        inputs  = batch_data["image"].float().to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
-        cls_gt  = batch_data["label"].long().to(device)   # (B, 1)
-        
-        cls_pred = model(inputs)
-        
-        loss, loss_detail = criterion(pred=cls_pred, gt=cls_gt)
-        loss[loss != loss] = 1e-6 ## nan loss 방지 확인점요
+        if isinstance(pred, tuple):
+            loss_main, loss_dict_main = criterion(pred=pred[0], gt=label)
+            loss_aux,  loss_dict_aux  = criterion(pred=pred[1], gt=label) # auxilary loss
+            loss = loss_main + 0.3*loss_aux
+            loss_dict = {k: loss_dict_main[k] + loss_dict_aux[k] for k in loss_dict_main}
+        else:
+            loss, loss_dict = criterion(pred=pred, gt=label)
+
         loss_value = loss.item()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             print("image == ", batch_data['image_meta_dict']['filename_or_obj'])
             print("label == ", batch_data['label_meta_dict']['filename_or_obj'])
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        metric_logger.update(key='train_loss', value=loss_value, n=image.shape[0])
+        for key in loss_dict:
+            if key.startswith('cls_'):
+                metric_logger.update(key='train_'+key, value=loss_dict[key].item(), n=image.shape[0])
 
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+        epoch_iterator.set_description("Training: Epochs %d (%d / %d Steps), (train_loss=%2.5f)" % (epoch, step, len(train_loader), loss_value))
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
 @torch.no_grad()
-def valid_Uptask_Sup(model, criterion, data_loader, device, print_freq, batch_size):
+def valid_Uptask_Sup(valid_loader, model, device, epoch):
     model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'Valid:'
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(valid_loader, desc="Validating (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(valid_loader))
 
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].float().to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
-        cls_gt  = batch_data["label"].long().to(device)   # (B, 1)
-
-        cls_pred = model(inputs)
-
-        loss, loss_detail = criterion(pred=cls_pred, gt=cls_gt)
-        loss[loss != loss] = 1e-6 ## nan loss 방지 확인점요
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # Metric CLS
-        auc            = auc_metric(y_pred=Softmax_To_Prob(cls_pred), y=Label_To_16_Onehot(cls_gt))
-        confuse_matrix = confuse_metric(y_pred=Pred_To_16_Onehot(cls_pred), y=Label_To_16_Onehot(cls_gt)) 
-        
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate()
+    pred_prob_list = []
+    gt_binary_list = []
     
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
+    for step, batch_data in enumerate(epoch_iterator):
+        
+        image, label = batch_data
+        image = image.to(device)
+        label = label.to(device)
 
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+        pred = model(image)
+
+        epoch_iterator.set_description("Validating: Epochs %d (%d / %d Steps)" % (epoch, step, len(valid_loader)))
+        
+        pred_prob_list.append(fn_tonumpy(pred))
+        gt_binary_list.append(fn_tonumpy(label))
+
+    pred_prob_list  = np.concatenate(pred_prob_list, axis=0).squeeze() # (B,)
+    gt_binary_list  = np.concatenate(gt_binary_list, axis=0).squeeze() # (B,)
+
+    # Metric Multi-Class CLS
+    f1  = f1_metric(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    acc = accuracy(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    sen = sensitivity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    spe = specificity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+
+    metric_logger.update(key='f1',  value=f1,  n=1)
+    metric_logger.update(key='acc', value=acc, n=1)
+    metric_logger.update(key='sen', value=sen, n=1)
+    metric_logger.update(key='spe', value=spe, n=1)
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
 @torch.no_grad()
-def test_Uptask_Sup(model, criterion, data_loader, device, print_freq, batch_size):
+def test_Uptask_Sup(test_loader, model, device, epoch, save_dir):
     model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'TEST:'
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(test_loader, desc="TEST (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(test_loader))
+
+    pred_prob_list = []
+    gt_binary_list = []
     
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+    for step, batch_data in enumerate(epoch_iterator):
         
-        inputs  = batch_data["image"].float().to(device)   # (B, 1, H, W) ---> (B, 1, H, W)
-        cls_gt  = batch_data["label"].long().to(device)   # (B, 1)
+        image, label = batch_data
+        image = image.to(device)
+        label = label.to(device)
 
-        cls_pred = model(inputs)
-            
-        loss, loss_detail = criterion(pred=cls_pred, gt=cls_gt)
-        loss[loss != loss] = 1e-6 ## nan loss 방지 확인점요
-        loss_value = loss.item()
+        pred = model(image)
 
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # Metric CLS
-        auc            = auc_metric(y_pred=Softmax_To_Prob(cls_pred), y=Label_To_16_Onehot(cls_gt))
-        confuse_matrix = confuse_metric(y_pred=Pred_To_16_Onehot(cls_pred), y=Label_To_16_Onehot(cls_gt)) 
+        epoch_iterator.set_description("TEST: (%d / %d Steps)" % (step, len(test_loader)))
         
+        pred_prob_list.append(fn_tonumpy(pred))
+        gt_binary_list.append(fn_tonumpy(label))
 
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate()
-    
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
+    pred_prob_list  = np.concatenate(pred_prob_list, axis=0).squeeze() # (B,)
+    gt_binary_list  = np.concatenate(gt_binary_list, axis=0).squeeze() # (B,)
 
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+    # Metric Multi-Class CLS
+    f1  = f1_metric(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    acc = accuracy(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    sen = sensitivity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    spe = specificity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+
+    metric_logger.update(key='f1',  value=f1,  n=1)
+    metric_logger.update(key='acc', value=acc, n=1)
+    metric_logger.update(key='sen', value=sen, n=1)
+    metric_logger.update(key='spe', value=spe, n=1)
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
 
-    # Unsupervised
+
+# Uptask Task - Unsupervised 미완성....
 def train_Uptask_Unsup_AE(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size):
     model.train(True)
     metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
@@ -255,7 +260,6 @@ def valid_Uptask_Unsup_AE(model, criterion, data_loader, device, epoch, print_fr
 
     # return {'loss': metric_logger.loss.global_avg, 'MAE':MAE}
     return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
-    
 
 @torch.no_grad()
 def test_Uptask_Unsup_AE(model, criterion, data_loader, device, print_freq, save_dir, batch_size):
@@ -313,527 +317,266 @@ def test_Uptask_Unsup_AE(model, criterion, data_loader, device, print_freq, save
     return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
     
 
-    # Previous Works - 1. Model Genesis
-def train_Uptask_ModelGenesis(model, criterion, data_loader, optimizer, device, epoch):
-    # 2d slice-wise based Learning...! 
-    model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
+# Down Task - General Fracture
+def train_Downtask_General_Fracture(train_loader, model, criterion, optimizer, device, epoch):
+    model.train()
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(train_loader))
     
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+    for step, batch_data in enumerate(epoch_iterator):
 
-        inputs  = batch_data["distort"].squeeze(4).to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        rec_gt  = batch_data["image"].squeeze(4).to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        image, label = batch_data
+        image = image.to(device)
+        label = label.to(device)
 
-        rec_pred = model(inputs)
+        pred = model(image).sigmoid()
 
-        loss, loss_detail = criterion(rec_pred=rec_pred, rec_gt=rec_gt)
+        loss, loss_dict = criterion(pred, label)
         loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-            # metric_logger.update(RotationLoss=loss1.data.item())
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-    # Gather the stats from all processes
-    print("Averaged stats:", metric_logger)
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
 
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+        metric_logger.update(key='train_loss', value=loss_value, n=image.shape[0])
+        for key in loss_dict:
+            if key.startswith('cls_'):
+                metric_logger.update(key='train_'+key, value=loss_dict[key].item(), n=image.shape[0])
+
+        epoch_iterator.set_description("Training: Epochs %d (%d / %d Steps), (train_loss=%2.5f)" % (epoch, step, len(train_loader), loss_value))
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
 @torch.no_grad()
-def valid_Uptask_ModelGenesis(model, criterion, data_loader, device):
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = 'Valid:'
-    
-    # switch to evaluation mode
+def valid_Downtask_General_Fracture(valid_loader, model, device, epoch):
     model.eval()
-    print_freq = 10
-    metric_count = metric_sum = 0
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(valid_loader, desc="Validating (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(valid_loader))
+
+    pred_prob_list = []
+    gt_binary_list = []
     
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+    for step, batch_data in enumerate(epoch_iterator):
         
-        inputs  = batch_data["distort"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        rec_gt  = batch_data["image"]                # (B, C, H, W, 1) ---> (B, C, H, W)
+        image, label = batch_data
+        image = image.to(device)
+        label = label.to(device)
 
-        with torch.no_grad():
-            rec_pred = torch.stack([ model(inputs[..., i]).detach().cpu() for i in range(inputs.shape[-1]) ], dim = -1)    #    ---> torch.Size([1, 1, 256, 256, 36])
+        pred = model(image).sigmoid()
 
-        # Metrics
-        loss, loss_detail = criterion(rec_pred=rec_pred, rec_gt=rec_gt)
-        loss_value = loss.item()
+        epoch_iterator.set_description("Validating: Epochs %d (%d / %d Steps)" % (epoch, step, len(valid_loader)))
+        
+        pred_prob_list.append(fn_tonumpy(pred))
+        gt_binary_list.append(fn_tonumpy(label))
 
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
+    pred_prob_list  = np.concatenate(pred_prob_list, axis=0).squeeze() # (B,)
+    gt_binary_list  = np.concatenate(gt_binary_list, axis=0).squeeze() # (B,)
 
-        # LOSS
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
+    # Metric Binary-Class CLS
+    auc = roc_auc_score(y_true=gt_binary_list, y_score=pred_prob_list)
+    f1  = f1_metric(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    acc = accuracy(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    sen = sensitivity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    spe = specificity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    ppv, npv = calculate_ppv_npv(y_true=gt_binary_list, y_pred=pred_prob_list.round())
 
+    metric_logger.update(key='auc', value=auc, n=1)
+    metric_logger.update(key='f1',  value=f1,  n=1)
+    metric_logger.update(key='acc', value=acc, n=1)
+    metric_logger.update(key='sen', value=sen, n=1)
+    metric_logger.update(key='spe', value=spe, n=1)
+    metric_logger.update(key='ppv', value=ppv, n=1)
+    metric_logger.update(key='npv', value=npv, n=1)
 
-    print('* Loss:{losses.global_avg:.3f} '.format(losses=metric_logger.loss))
-    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    return {'loss': metric_logger.loss.global_avg}
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
-@torch.no_grad()
-def test_Uptask_ModelGenesis(model, criterion, data_loader, device, epoch, output_dir):
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = 'Valid:'
-
-    save_check = os.path.join(output_dir, 'check_samples')
-    Path(save_check).mkdir(parents=True, exist_ok=True)
-    
-    # switch to evaluation mode
+# @torch.no_grad()
+def test_Downtask_General_Fracture(test_loader, model, device, epoch, save_dir):
     model.eval()
-    print_freq = 10
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(test_loader, desc="TEST (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(test_loader))
+    grad_cam = GradCAM(nn_module=model, target_layers='feat_extractor') # Grad-CAM
 
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
+    pred_prob_list  = []
+    gt_binary_list  = []
+    patient_id_list = []
+
+    cnt = 0
+    for step, batch_data in enumerate(epoch_iterator):
         
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        seg_gt  = batch_data["label"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
+        image, label, patient_id = batch_data
+        image = image.to(device)
+        label = label.to(device)
 
-        with torch.no_grad():
-            seg_pred = torch.stack([ model(inputs[..., i]).detach().cpu() for i in range(inputs.shape[-1]) ], dim = 0)    #    ---> (B, 1)
+        pred = model(image).sigmoid()
 
-        loss, loss_detail = criterion(seg_pred=seg_pred, seg_gt=seg_gt)
-        loss_value = loss.item()
+        epoch_iterator.set_description("TEST: (%d / %d Steps)" % (step, len(test_loader)))
+        
+        patient_id_list.append(patient_id)
+        pred_prob_list.append(fn_tonumpy(pred))
+        gt_binary_list.append(fn_tonumpy(label))
 
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
+        # Grad-CAM
+        result = grad_cam(x=image, layer_idx=-1)
+        uint8_mask = skimage.img_as_ubyte(result.detach().cpu().numpy().squeeze())
+        heatmap = cv2.applyColorMap( uint8_mask, cv2.COLORMAP_JET )
+        heatmap = skimage.img_as_float32(heatmap)
+        cam_img = heatmap + image[0].cpu().detach().numpy().transpose(1,2,0)
+        # Min Max Normalize
+        cam_img = cam_img - cam_img.min() 
+        cam_img /= cam_img.max()            
 
-        # LOSS
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # Metrics
-        value, not_nans = dice_metric(y_pred=torch.sigmoid(seg_pred), y=seg_gt)
-        metric_count   += not_nans
-        metric_sum     += value * not_nans
-
-            
-    # Metric SEG
-    Dice = (metric_sum / metric_count).item()
-
-    print('* Loss:{losses.global_avg:.3f} | Dice:{dice:.3f} '.format(losses=metric_logger.loss, dice=Dice))
-    # return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    return {'loss': metric_logger.loss.global_avg, 'Dice': Dice}
+        # PNG Save
+        plt.imsave(save_dir+'/idx_'+str(cnt)+'_input_'+str(label.item())+'.png', image.detach().cpu().numpy().squeeze(), cmap="gray")
+        plt.imsave(save_dir+'/idx_'+str(cnt)+'_pred_cam_'+str(pred.round().item())+'.png', cam_img)
+        cnt += 1
 
 
-# Down Task
-    # General Fracture - Need for Customizing ...!
-def train_Downtask_General_Fracture(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
-    # 2d slice-wise based Learning...! 
-    model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
+    patient_id_list = np.concatenate(patient_id_list, axis=0).squeeze() # (B,)
+    pred_prob_list  = np.concatenate(pred_prob_list, axis=0).squeeze() # (B,)
+    gt_binary_list  = np.concatenate(gt_binary_list, axis=0).squeeze() # (B,)
+
+    # Metric Binary-Class CLS
+    auc = roc_auc_score(y_true=gt_binary_list, y_score=pred_prob_list)
+    f1  = f1_metric(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    acc = accuracy(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    sen = sensitivity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    spe = specificity(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+    ppv, npv = calculate_ppv_npv(y_true=gt_binary_list, y_pred=pred_prob_list.round())
+
+    metric_logger.update(key='auc', value=auc, n=1)
+    metric_logger.update(key='f1',  value=f1,  n=1)
+    metric_logger.update(key='acc', value=acc, n=1)
+    metric_logger.update(key='sen', value=sen, n=1)
+    metric_logger.update(key='spe', value=spe, n=1)
+    metric_logger.update(key='ppv', value=ppv, n=1)
+    metric_logger.update(key='npv', value=npv, n=1)
+
+    # DataFrame
+    df = pd.DataFrame()
+    df['Patient_id'] = patient_id_list
+    df['Prob']       = pred_prob_list
+    df['Label']      = gt_binary_list
+    df['Decision']   = pred_prob_list.round()
+    df.to_csv(save_dir+'/pred_results.csv')
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
+
+
+# Down Task - BAA
+def train_Downtask_RSNA_BAA(train_loader, model, criterion, optimizer, device, epoch):
+    model.train()
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(train_loader))
     
-    if gradual_unfreeze:
-        # Gradual Unfreezing
-        # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
-        if epoch >= 0 and epoch <= 100:
-            freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
-            print("Freeze encoder ...!!")
-        elif epoch >= 101 and epoch < 111:
-            print("Unfreeze encoder.layer4 ...!")
-            unfreeze_params(model.module.encoder.layer4) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer4)
-        elif epoch >= 111 and epoch < 121:
-            print("Unfreeze encoder.layer3 ...!")
-            unfreeze_params(model.module.encoder.layer3) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer3)
-        elif epoch >= 121 and epoch < 131:
-            print("Unfreeze encoder.layer2 ...!")
-            unfreeze_params(model.module.encoder.layer2) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer2)
-        elif epoch >= 131 and epoch < 141:
-            print("Unfreeze encoder.layer1 ...!")
-            unfreeze_params(model.module.encoder.layer1) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer1)
-        else :
-            print("Unfreeze encoder.stem ...!")
-            unfreeze_params(model.module.encoder) if hasattr(model, 'module') else unfreeze_params(model.encoder)
-    else :
-        print("Freeze encoder ...!")
-        freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
+    for step, batch_data in enumerate(epoch_iterator):
 
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #                 ---> (B, 1)
-        assert len(cls_gt.shape) == 2
+        image, age, gender = batch_data
+        image  = image.to(device)
+        age    = age.to(device)
+        gender = gender.to(device)
 
-        cls_pred = model(inputs)
+        pred = model(image, gender)
 
-        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
+        loss, loss_dict = criterion(pred=pred, gt=age)
         loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+
+        metric_logger.update(key='train_loss', value=loss_value, n=image.shape[0])
+        for key in loss_dict:
+            if key.startswith('cls_'):
+                metric_logger.update(key='train_'+key, value=loss_dict[key].item(), n=image.shape[0])
+
+        epoch_iterator.set_description("Training: Epochs %d (%d / %d Steps), (train_loss=%2.5f)" % (epoch, step, len(train_loader), loss_value))
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
 @torch.no_grad()
-def valid_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+def valid_Downtask_RSNA_BAA(valid_loader, model, device, epoch):
     model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'Valid:'
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(valid_loader, desc="Validating (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(valid_loader))
 
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)   #                 ---> (B, 1)
-
-        cls_pred = model(inputs)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value) 
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # # Post-processing
-        cls_pred = torch.sigmoid(cls_pred)
-
-        # Metric CLS
-        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
-        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)
-
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate()
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
+    pred_age_list = []
+    gt_age_list   = []
     
-    auc_metric.reset()
-    confuse_metric.reset()
+    for step, batch_data in enumerate(epoch_iterator):
+        
+        image, age, gender = batch_data
+        image  = image.to(device)
+        age    = age.to(device)
+        gender = gender.to(device)
 
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
+        pred = model(image, gender)
+
+        epoch_iterator.set_description("Validating: Epochs %d (%d / %d Steps)" % (epoch, step, len(valid_loader)))
+        
+        pred_age_list.append(fn_tonumpy(pred))
+        gt_age_list.append(fn_tonumpy(age))
+
+    pred_age_list = np.concatenate(pred_age_list, axis=0).squeeze() # (B,)
+    gt_age_list   = np.concatenate(gt_age_list, axis=0).squeeze() # (B,)
+
+    # regresion
+    mae = mean_absolute_error(y_true=gt_age_list, y_pred=pred_age_list)
+    mse = mean_squared_error(y_true=gt_age_list, y_pred=pred_age_list)
+    r2  = r2_score(y_true=gt_age_list, y_pred=pred_age_list)
+
+    metric_logger.update(key='mae', value=mae, n=1)
+    metric_logger.update(key='mse', value=mse,  n=1)
+    metric_logger.update(key='r2', value=r2, n=1)
+
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}
 
 @torch.no_grad()
-def test_Downtask_General_Fracture(model, criterion, data_loader, device, print_freq, batch_size):
+def test_Downtask_RSNA_BAA(test_loader, model, device, epoch, save_dir):
     model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'TEST:'
+    metric_logger  = utils.AverageMeter()
+    epoch_iterator = tqdm(test_loader, desc="TEST (X / X Steps) (loss=X.X)", dynamic_ncols=True, total=len(test_loader))
+
+    pred_age_list   = []
+    gt_age_list     = []
+    patient_id_list = []
+    for step, batch_data in enumerate(epoch_iterator):
+        
+        image, age, gender, patient_id = batch_data
+        image  = image.to(device)
+        age    = age.to(device)
+        gender = gender.to(device)
+
+        pred = model(image, gender)
+
+        epoch_iterator.set_description("TEST: (%d / %d Steps)" % (step, len(test_loader)))
+        
+        patient_id_list.append(patient_id)
+        pred_age_list.append(fn_tonumpy(pred))
+        gt_age_list.append(fn_tonumpy(age))
     
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)     # (B, C, H, W, D)
-        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #  ---> (B, 1)
+    patient_id_list = np.concatenate(patient_id_list, axis=0).squeeze() # (B,)
+    pred_age_list   = np.concatenate(pred_age_list, axis=0).squeeze() # (B,)
+    gt_age_list     = np.concatenate(gt_age_list, axis=0).squeeze() # (B,)
 
-        cls_pred = model(inputs)
+    # regresion
+    mae = mean_absolute_error(y_true=gt_age_list, y_pred=pred_age_list)
+    mse = mean_squared_error(y_true=gt_age_list, y_pred=pred_age_list)
+    r2  = r2_score(y_true=gt_age_list, y_pred=pred_age_list)
 
-        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
-        loss_value = loss.item()
+    metric_logger.update(key='mae', value=mae, n=1)
+    metric_logger.update(key='mse', value=mse, n=1)
+    metric_logger.update(key='r2', value=r2, n=1)
 
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
+    # DataFrame
+    df = pd.DataFrame()
+    df['Patient_id'] = patient_id_list
+    df['Age']        = pred_age_list
+    df['Target']     = gt_age_list
+    df.to_csv(save_dir+'/pred_results.csv')
 
-        # LOSS
-        metric_logger.update(loss=loss_value) 
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # # Post-processing
-        cls_pred = torch.sigmoid(cls_pred)
-        
-        # Metric CLS
-        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
-        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)   # pred_cls must be round() !!
-
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate() 
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
-
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
-
-
-def train_Downtask_Pneumonia(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
-    # 2d slice-wise based Learning...! 
-    model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    
-    if gradual_unfreeze is not None:
-        # Gradual Unfreezing
-        # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
-        if epoch >= 0 and epoch <= 100:
-            freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
-            print("Freeze encoder ...!")
-        elif epoch >= 101 and epoch < 111:
-            print("Unfreeze encoder.layer4 ...!")
-            unfreeze_params(model.module.encoder.layer4) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer4)
-        elif epoch >= 111 and epoch < 121:
-            print("Unfreeze encoder.layer3 ...!")
-            unfreeze_params(model.module.encoder.layer3) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer3)
-        elif epoch >= 121 and epoch < 131:
-            print("Unfreeze encoder.layer2 ...!")
-            unfreeze_params(model.module.encoder.layer2) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer2)
-        elif epoch >= 131 and epoch < 141:
-            print("Unfreeze encoder.layer1 ...!")
-            unfreeze_params(model.module.encoder.layer1) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer1)
-        else :
-            print("Unfreeze encoder.stem ...!")
-            unfreeze_params(model.module.encoder) if hasattr(model, 'module') else unfreeze_params(model.encoder)
-    else :
-        print("Freeze encoder ...!")
-        freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
-
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #                 ---> (B, 1)
-        # print(cls_gt.shape)
-
-        cls_pred = model(inputs)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
-
-@torch.no_grad()
-def valid_Downtask_Pneumonia(model, criterion, data_loader, device, print_freq, batch_size):
-    model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'Valid:'
-
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)   #                 ---> (B, 1)
-
-        cls_pred = model(inputs)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value) 
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # # Post-processing
-        cls_pred = torch.sigmoid(cls_pred)
-
-        # Metric CLS
-        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
-        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)
-
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate()
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
-
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
-@torch.no_grad()
-def test_Downtask_Pneumonia(model, criterion, data_loader, device, print_freq, batch_size):
-    model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'TEST:'
-    
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].to(device)     # (B, C, H, W, D)
-        cls_gt  = batch_data["label"].to(device).unsqueeze(-1)     #  ---> (B, 1)
-
-        cls_pred = model(inputs)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred.to(torch.float32), cls_gt=cls_gt.to(torch.float32))
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        # LOSS
-        metric_logger.update(loss=loss_value) 
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-        # # Post-processing
-        cls_pred = torch.sigmoid(cls_pred)
-
-        # Metric CLS
-        auc                 = auc_metric(y_pred=cls_pred, y=cls_gt)
-        confuse_matrix      = confuse_metric(y_pred=cls_pred.round(), y=cls_gt)
-
-
-    # Aggregatation
-    auc                = auc_metric.aggregate()
-    f1, acc, sen, spe  = confuse_metric.aggregate()
-    metric_logger.update(auc=auc, f1=f1, acc=acc, sen=sen, spe=spe)          
-    
-    auc_metric.reset()
-    confuse_metric.reset()
-
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
-
-
-def train_Downtask_RSNA_BAA(model, criterion, data_loader, optimizer, device, epoch, print_freq, batch_size, gradual_unfreeze):
-    # 2d slice-wise based Learning...! 
-    model.train(True)
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    
-    # if gradual_unfreeze is not None:
-    #     # Gradual Unfreezing
-    #     # 10 epoch 씩 one stage block 풀기, 100 epoch까지는 아예 고정
-    #     if epoch >= 0 and epoch <= 100:
-    #         freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
-    #         print("Freeze encoder ...!")
-    #     elif epoch >= 101 and epoch < 111:
-    #         print("Unfreeze encoder.layer4 ...!")
-    #         unfreeze_params(model.module.encoder.layer4) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer4)
-    #     elif epoch >= 111 and epoch < 121:
-    #         print("Unfreeze encoder.layer3 ...!")
-    #         unfreeze_params(model.module.encoder.layer3) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer3)
-    #     elif epoch >= 121 and epoch < 131:
-    #         print("Unfreeze encoder.layer2 ...!")
-    #         unfreeze_params(model.module.encoder.layer2) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer2)
-    #     elif epoch >= 131 and epoch < 141:
-    #         print("Unfreeze encoder.layer1 ...!")
-    #         unfreeze_params(model.module.encoder.layer1) if hasattr(model, 'module') else unfreeze_params(model.encoder.layer1)
-    #     else :
-    #         print("Unfreeze encoder.stem ...!")
-    #         unfreeze_params(model.module.encoder) if hasattr(model, 'module') else unfreeze_params(model.encoder)
-    # else :
-    #     print("Freeze encoder ...!")
-    #     freeze_params(model.module.encoder) if hasattr(model, 'module') else freeze_params(model.encoder)
-
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].float().to(device)     # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].float().to(device)     #                 ---> (B, 1)
-        gender  = batch_data['gender'].to(device)
-        
-        cls_pred = model(inputs, gender)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        metric_logger.update(loss=loss_value)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        
-    return {k: round(meter.global_avg, 7) for k, meter in metric_logger.meters.items()}
-
-@torch.no_grad()
-def valid_Downtask_RSNA_BAA(model, criterion, data_loader, device, print_freq, batch_size):
-    model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'Valid:'
-
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].float().to(device)   # (B, C, H, W, 1) ---> (B, C, H, W)
-        cls_gt  = batch_data["label"].float().to(device)   #                 ---> (B, 1)
-        gender  = batch_data['gender'].to(device) 
-
-        cls_pred = model(inputs, gender)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-        
-        MAE = F.l1_loss(input=cls_pred, target=cls_gt).item()
-
-        # LOSS
-        # Metric
-        metric_logger.update(loss=loss_value)
-        metric_logger.update(metric=MAE)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-    print('* Loss:{losses.global_avg:.3f} | Metric:{metric.global_avg:.3f} '.format(losses=metric_logger.loss, metric=metric_logger.metric))
-
-    return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
-
-@torch.no_grad()
-def test_Downtask_RSNA_BAA(model, criterion, data_loader, device, print_freq, batch_size):
-    model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ", n=batch_size)
-    header = 'TEST:'
-    
-    for batch_data in metric_logger.log_every(data_loader, print_freq, header):
-        
-        inputs  = batch_data["image"].float().to(device)     # (B, C, H, W, D)
-        cls_gt  = batch_data["label"].float().to(device)     #  ---> (B, 1)
-        gender  = batch_data['gender'].to(device) 
-
-        cls_pred = model(inputs, gender)
-
-        loss, loss_detail = criterion(cls_pred=cls_pred, cls_gt=cls_gt)
-        loss_value = loss.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-        
-        MAE = F.l1_loss(input=cls_pred, target=cls_gt).item()
-
-        # LOSS
-        # Metric
-        metric_logger.update(loss=loss_value)
-        metric_logger.update(metric=MAE)
-        if loss_detail is not None:
-            metric_logger.update(**loss_detail)
-
-    print('* Loss:{losses.global_avg:.3f} | Metric:{metric.global_avg:.3f} '.format(losses=metric_logger.loss, metric=metric_logger.metric))
-
-    return {'loss': metric_logger.loss.global_avg, 'MAE':metric_logger.metric.global_avg}
+    return {k: round(v, 7) for k, v in metric_logger.average().items()}

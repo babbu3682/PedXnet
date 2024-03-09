@@ -7,6 +7,7 @@ import re
 import glob
 import pydicom
 import skimage
+from PIL import Image
 import albumentations as A
 from torch.utils.data import Dataset as BaseDataset
 from albumentations.pytorch import ToTensorV2
@@ -34,12 +35,6 @@ def change_to_uint8(image, **kwargs):
 
 def change_to_float32(image, **kwargs):
     return skimage.util.img_as_float32(image)
-
-def get_label(x):
-    if '/fracture/' in x:
-        return torch.tensor(1.0).unsqueeze(0)
-    else :
-        return torch.tensor(0.0).unsqueeze(0)
 
 def Clip_Resize_PaddingWithAspect(image, **kwargs):
     image = np.clip(image, a_min=np.percentile(image, 0.5), a_max=np.percentile(image, 99.5))
@@ -113,34 +108,56 @@ def get_transforms(mode="train"):
             A.Lambda(image=minmax_normalize, always_apply=True),
             A.Lambda(image=change_to_uint8, always_apply=True),
             A.Lambda(image=fixed_clahe, always_apply=True),
-            A.Lambda(image=change_to_float32, always_apply=True),  
+            A.Lambda(image=change_to_float32, always_apply=True),
             A.Lambda(image=minmax_normalize, always_apply=True),
 
             # normalization
             ToTensorV2(transpose_mask=True)
         ], additional_targets={'image2':'image'})
 
+    elif mode == "test":
+        return A.Compose([
+            # preprocessing
+            A.Lambda(image=Clip_Resize_PaddingWithAspect),
+            
+            # clahe
+            A.Lambda(image=minmax_normalize, always_apply=True),
+            A.Lambda(image=change_to_uint8, always_apply=True),
+            A.Lambda(image=fixed_clahe, always_apply=True),
+            A.Lambda(image=change_to_float32, always_apply=True),
+            A.Lambda(image=minmax_normalize, always_apply=True),
 
-class General_Fracture_Dataset(BaseDataset):
+            # normalization
+            ToTensorV2(transpose_mask=True)
+        ], additional_targets={'image2':'image'})        
+
+
+class GRAZPEDWRI_DX_Dataset(BaseDataset):
     def __init__(self, mode="train"):
         self.mode = mode
         if mode == 'train':
-            self.image_list = list_sort_nicely(glob.glob('/workspace/sunggu/3.Child/PedXnet_Code_Factory/datasets/1.General_Fracture/train/*/*.npy'))
-            self.label_list = list(map(get_label, self.image_list))
-        else:
-            self.image_list = list_sort_nicely(glob.glob('/workspace/sunggu/3.Child/PedXnet_Code_Factory/datasets/1.General_Fracture/valid/*/*.npy'))
-            self.label_list = list(map(get_label, self.image_list))
+            target_df = pd.read_csv("/workspace/sunggu/3.Child/PedXnet_Code_Factory/datasets/4.GRAZPEDWRI-DX/train.csv")
+            self.image_list = target_df['filestem'].values
+            self.label_list = target_df['fracture_visible'].values
+        elif mode == 'valid':
+            target_df = pd.read_csv("/workspace/sunggu/3.Child/PedXnet_Code_Factory/datasets/4.GRAZPEDWRI-DX/valid.csv")
+            self.image_list = target_df['filestem'].values
+            self.label_list = target_df['fracture_visible'].values
+        elif mode == 'test':
+            target_df = pd.read_csv("/workspace/sunggu/3.Child/PedXnet_Code_Factory/datasets/4.GRAZPEDWRI-DX/test.csv")
+            self.image_list = target_df['filestem'].values
+            self.label_list = target_df['fracture_visible'].values            
         
         self.transforms = get_transforms(mode=mode)
 
     def __len__(self):
-        return len(self.image_list)                   
+        return len(self.image_list)
 
     def __getitem__(self, i):
 
         # Read Image
-        image = np.load(self.image_list[i]).squeeze() # shape (H, W), range 12bit
-        label = self.label_list[i]
+        image = np.array(Image.open(self.image_list[i])) # uint8, 0~255 range
+        label = torch.tensor(self.label_list[i]).unsqueeze(0)
         
         # print("Check!", image.shape, image.dtype, image.max(), image.min())
 
@@ -152,4 +169,4 @@ class General_Fracture_Dataset(BaseDataset):
         if self.mode == 'test':
             return image.float(), label.float(), self.image_list[i]
         else:
-            return image.float(), label.float()
+            return image.float(), label.float()        

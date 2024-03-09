@@ -1,63 +1,33 @@
 import torch
 
+# Downtask_GRAZPEDWRI_DX_Loss
+class Downtask_GRAZPEDWRI_DX_Loss(torch.nn.Module):
+    def __init__(self):
+        super(Downtask_GRAZPEDWRI_DX_Loss, self).__init__()
+        self.bce_loss = torch.nn.BCELoss()
 
-# Uptask Loss 
-class Uptask_Loss(torch.nn.Module):
-    def __init__(self, model_name='Uptask_Sup_Classifier'):
-        super().__init__()
-        self.model_name = model_name
+    def forward(self, pred, target):
+        bce_loss = self.bce_loss(pred, target)
 
-        self.CE_loss    = torch.nn.CrossEntropyLoss()  #  you should not use softmax before.
-        self.L1_loss    = torch.nn.L1Loss()
-        self.L2_loss    = torch.nn.MSELoss()
+        loss_details = {'cls_bce_loss': bce_loss}
 
-        self.loss1_weight = 1.0
-        self.loss2_weight = 1.0
-        self.loss3_weight = 1.0
+        return bce_loss, loss_details
 
-    def forward(self, pred=None, gt=None):
-        if self.model_name == 'Uptask_Sup_Classifier':
-            Loss_1 = self.CE_loss(pred, gt)
-            total  = self.loss1_weight*Loss_1
-            return total, {'CE_Loss':(self.loss1_weight*Loss_1).item()}
-    
-        elif self.model_name == 'Uptask_Unsup_AutoEncoder':
-            Loss_1 = self.L1_loss(pred, gt)
-            total  = self.loss1_weight*Loss_1
-            return total, {'L1_loss':(self.loss1_weight*Loss_1).item()}
 
-        elif self.model_name == 'Uptask_Unsup_ModelGenesis':
-            Loss_1 = self.CE_loss(pred, gt)
-            total  = self.loss1_weight*Loss_1
-            return total, {'CE_Loss':(self.loss1_weight*Loss_1).item()}
+def get_loss(name):
+    # Upstream    
+    if name == 'Uptask_PedXNet_Supervised_Loss':
+        return torch.nn.CrossEntropyLoss()
 
-        else: 
-            raise Exception('Error...! self.model_name in Loss')      
+    # Downstream
+    elif name == 'Downtask_BoneAge_Loss':
+        return torch.nn.MSELoss()
 
-# Downtask Loss
-class Downtask_Loss(torch.nn.Module):
-    def __init__(self, model_name):
-        super().__init__()
-        self.model_name = model_name
-        
-        self.BCE_loss  = torch.nn.BCEWithLogitsLoss()
-        self.L1_loss   = torch.nn.L1Loss()
-        self.L2_loss   = torch.nn.MSELoss()
+    elif name == 'Downtask_GeneralFracture_Loss':
+        return torch.nn.BCELoss()
 
-        self.loss1_weight = 1.0
-        self.loss2_weight = 1.0
-        self.loss3_weight = 1.0
+    elif name == 'Downtask_GRAZPEDWRI_DX_Loss':
+        return Downtask_GRAZPEDWRI_DX_Loss()       
 
-    def forward(self, cls_pred=None, cls_gt=None):
-        if self.model_name == 'Downtask_General_Fracture' or self.model_name == 'Downtask_Pneumonia':
-            Loss_1 = self.BCE_loss(cls_pred, cls_gt)
-            total  = self.loss1_weight*Loss_1
-            return total, {'BCE_Loss':(self.loss1_weight*Loss_1).item()}
-        
-        elif self.model_name == 'Downtask_RSNA_Boneage':
-            Loss_1 = self.L2_loss(cls_pred, cls_gt)
-            total  = self.loss1_weight*Loss_1
-            return total, {'L2_Loss':(self.loss1_weight*Loss_1).item()}
-
-        else: 
-            raise Exception('Error...! self.model_name in Loss')      
+    else:
+        raise NotImplementedError

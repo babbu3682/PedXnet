@@ -1,12 +1,10 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
 # PedXnet - Official Pytorch Implementation
 
-We proposed a Pediatric radiographs' representation transfer learning network called <b>PedXnet</b>.
+It is currently incomplete. It will be still updated.
 
+<p align="center"><img width="100%" src="figures/Graphical_Abstract.png" /></p>
 
 ## 💡 Highlights
-
 + Three class-balanced pediatric radiograph datasets (PedXnets) by radiographic views labeling have been constructed.
 
 + Robust representation was developed by a radiographic views recognition task on the PedXnets.
@@ -14,246 +12,101 @@ We proposed a Pediatric radiographs' representation transfer learning network ca
 + Radiographic view representations using Model-PedXNets have been validated by applying them to two pediatric medical tasks, which showed better performance than Model-Baseline, and even equivalent and better performance than Model-ImageNet.
 
 
-
-<p align="center"><img width="100%" src="figures/ModelPedXnet-7Class.png" /></p>
-<!-- <p align="center"><img width="85%" src="figures/framework.png" /></p> -->
-
 ## Paper
-This repository provides the official implementation of training PedXnet as well as the usage of the pre-trained SMART-Net in the following paper:
+This repository provides the official implementation code of PedXnet in the following paper:<br/>
+<b>Supervised representation learning based on various levels of pediatric radiographic views for transfer learning</b><br/><br/>
+Authors: [Sunggu Kyung](https://github.com/babbu3682), Miso Jang, Seungju Park, Hee Mang Yoon, Gil-Sun Hong, Namkug Kim<br/><br/>
+[MI2RL LAB](https://www.mi2rl.co/)<br/><br/>
+(Under revision...) Nature Scientific Report<br/>
 
-
-<b>Supervised representation learning based on various levels of pediatric radiographic views for transfer learning</b> <br/>
-[Sunggu Kyung](https://github.com/babbu3682)<sup>1</sup>, Miso Jang, Seungju Park, Hee Mang Yoon, Gil-Sun Hong, and Namkug Kim <br/>
-[MI2RL LAB](https://www.mi2rl.co/) <br/>
-<!-- <b>(Under revision...)</b> Medical Image Analysis (MedIA) <br/> -->
-<!-- [paper](https://arxiv.org/pdf/2004.07882.pdf) | [code](https://github.com/babbu3682/SMART-Net) | [graphical abstract](https://ars.els-cdn.com/content/image/1-s2.0-S1361841520302048-fx1_lrg.jpg) -->
-<!-- [code](https://github.com/babbu3682/SMART-Net) -->
 
 
 ## Requirements
 + Linux
++ CUDA 11.6
 + Python 3.8.5
-+ PyTorch 1.8.0
-
++ Pytorch 1.13.1
 
 ## 📦 PedXnet Framework
 ### 1. Clone the repository and install dependencies
 ```bash
-$ git clone https://github.com/babbu3682/PedXnet_Code_Factory.git
-$ cd PedXnet_Code_Factory/
+$ git clone https://github.com/babbu3682/PedXnet.git
+$ cd MTD-GAN/
 $ pip install -r requirements.txt
 ```
-
+# 여기부터
 ### 2. Preparing data
-#### For your convenience, we have provided few 3D nii samples from [Physionet publish dataset](https://physionet.org/content/ct-ich/1.3.1/) as well as their mask labels. 
-#### Note: We do not use this data as a train, it is just for code publishing examples.
+#### Download the dataset from [GRAZPEDWRI-DX](https://figshare.com/articles/dataset/GRAZPEDWRI-DX/14825193).
 
-<!-- Download the data from [this repository](https://zenodo.org/record/4625321/files/TransVW_data.zip?download=1).  -->
-You can use your own data using the [dicom2nifti](https://github.com/icometrix/dicom2nifti) for converting from dicom to nii.
-
-- The processed hemorrhage directory structure
+- The processed dataset directory structure as follows:
 ```
-datasets/samples/
+data/
     train
-        |--  sample1_hemo_img.nii.gz
-        |--  sample1_hemo_mask.nii
-        |--  sample2_normal_img.nii.gz
-        |--  sample2_normal_mask.nii        
-                .
-                .
-                .
+        |--  0001_1297860395_01_WRI-L1_M014.png
+        |--  0001_1297860435_01_WRI-L2_M014.png
+                    .
+                    .
+                    .
     valid
-        |--  sample9_hemo_img.nii.gz
-        |--  sample9_hemo_mask.nii
-        |--  sample10_normal_img.nii.gz
-        |--  sample10_normal_mask.nii
-                .
-                .
-                .
+        |--  0010_0604034401_01_WRI-L1_M014.png
+        |--  0010_0604034442_01_WRI-L2_M014.png
+                    .
+                    .
+                    .
     test
-        |--  sample20_hemo_img.nii.gz
-        |--  sample20_hemo_mask.nii
-        |--  sample21_normal_img.nii.gz
-        |--  sample21_normal_mask.nii
-                .
-                .
-                .   
+        |--  0066_1261433016_01_WRI-L1_M011.png
+        |--  0066_1261433167_01_WRI-L2_M011.png
+                    .
+                    .
+                    .
 ```
 
-### 3. Upstream
-#### 📋 Available List
-- [x] Up_ImageNet
-- [x] Up_Autoencoder
-- [x] Up_PedXnet
+### script examples
 
-
-
-**+ train**: We conducted upstream training with three multi-task including classificatiom, segmentation and reconstruction.
+**• train**:
 ```bash
-python train.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---model-name 'Up_SMART_Net' \
---batch-size 10 \
---epochs 1000 \
---num-workers 4 \
---pin-mem \
---training-stream 'Upstream' \
---multi-gpu-mode 'DataParallel' \
---cuda-visible-devices '2, 3' \
---gradual-unfreeze 'True' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/up_test'
-```
-
-**+ test**: We conducted upstream training with three multi-task including classificatiom, segmentation and reconstruction.
-```bash
-python test.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---test-dataset-name 'Custom' \
---slice-wise-manner "False" \
---model-name 'Up_SMART_Net' \
---num-workers 4 \
---pin-mem \
---training-stream 'Upstream' \
+CUDA_VISIBLE_DEVICES=4 python -W ignore train.py \
+--dataset 'GRAZPEDWRI_DX' \
+--train-batch-size 20 \
+--valid-batch-size 20 \
+--train-num-workers 20 \
+--valid-num-workers 20 \
+--model 'Downtask_General_Fracture_PedXNet_30Class' \
+--loss 'Downtask_GRAZPEDWRI_DX_Loss' \
+--optimizer 'adam' \
+--scheduler 'poly_lr' \
+--epochs 200 \
+--warmup-epochs 5 \
+--lr 1e-4 \
+--min-lr 1e-6 \
 --multi-gpu-mode 'Single' \
---cuda-visible-devices '2' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/up_test' \
---resume '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/up_test/epoch_0_checkpoint.pth'
+--device 'cuda' \
+--print-freq 10 \
+--save-checkpoint-every 1 \
+--checkpoint-dir '/workspace/sunggu/3.Child/PedXnet_Code_Factory/checkpoints/Fracture/GRAZPEDWRI_DX_InceptionV3_PedXNet_30Class' \
+--save-dir '/workspace/sunggu/3.Child/PedXnet_Code_Factory/predictions/train/Fracture/GRAZPEDWRI_DX_InceptionV3_PedXNet_30Class' \
+--memo 'inceptionV3, test, node14'
 ```
 
-### 4. Downstream
-
-#### 📋 Available List
-- [x] Down_Fracture
-- [x] Down_Boneage
-- [x] Down_Pneumonia
-
-#### - Down_Fracture
-**+ train**: We conducted downstream training using multi-task representation.
+**• test**:
 ```bash
-python train.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---model-name 'Down_SMART_Net_CLS' \
---batch-size 2 \
---epochs 1000 \
---num-workers 4 \
---pin-mem \
---training-stream 'Downstream' \
---multi-gpu-mode 'DataParallel' \
---cuda-visible-devices '2, 3' \
---gradual-unfreeze 'True' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_cls_test' \
---from-pretrained '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/[UpTASK]ResNet50_ImageNet.pth' \
---load-weight-type 'encoder'
-```
-**+ test**: We conducted upstream training with three multi-task including classificatiom, segmentation and reconstruction.
-```bash
-python test.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---test-dataset-name 'Custom' \
---slice-wise-manner 'False' \
---model-name 'Down_SMART_Net_CLS' \
---num-workers 4 \
---pin-mem \
---training-stream 'Downstream' \
+CUDA_VISIBLE_DEVICES=2 python -W ignore test.py \
+--dataset 'GRAZPEDWRI_DX' \
+--test-batch-size 20 \
+--test-num-workers 20 \
+--model 'Downtask_General_Fracture_PedXNet_30Class' \
+--loss 'Downtask_GRAZPEDWRI_DX_Loss' \
 --multi-gpu-mode 'Single' \
---cuda-visible-devices '2' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_cls_test' \
---resume '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_cls_test/epoch_0_checkpoint.pth'
-
+--device 'cuda' \
+--checkpoint-dir '/workspace/sunggu/3.Child/PedXnet_Code_Factory/checkpoints/Fracture/GRAZPEDWRI_DX_InceptionV3_PedXNet_30Class_TEST' \
+--save-dir '/workspace/sunggu/3.Child/PedXnet_Code_Factory/predictions/test/Fracture/GRAZPEDWRI_DX_InceptionV3_PedXNet_30Class_TEST' \
+--resume "/workspace/sunggu/3.Child/PedXnet_Code_Factory/checkpoints/Fracture/GRAZPEDWRI_DX_InceptionV3_PedXNet_30Class/epoch_?_checkpoint.pth" \
+--memo 'inceptionV3, test, node14' \
+--epoch ?
 ```
 
-#### - Down_Boneage
-**+ train**: We conducted downstream training using multi-task representation.
-```bash
-python train.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---model-name 'Down_SMART_Net_SEG' \
---batch-size 2 \
---epochs 1000 \
---num-workers 4 \
---pin-mem \
---training-stream 'Downstream' \
---multi-gpu-mode 'DataParallel' \
---cuda-visible-devices '2, 3' \
---gradual-unfreeze 'True' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_seg_test' \
---from-pretrained '/workspace/sunggu/1.Hemorrhage/SMART-Net/up_test/epoch_0_checkpoint.pth' \
---load-weight-type 'encoder'
-```
-**+ test**: We conducted upstream training with three multi-task including classificatiom, segmentation and reconstruction.
-```bash
-python test.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---test-dataset-name 'Custom' \
---slice-wise-manner 'False' \
---model-name 'Down_SMART_Net_SEG' \
---num-workers 4 \
---pin-mem \
---training-stream 'Downstream' \
---multi-gpu-mode 'Single' \
---cuda-visible-devices '2' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_seg_test' \
---resume '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_seg_test/epoch_0_checkpoint.pth'
-```
-
-#### - Down_Pneumonia
-**+ train**: We conducted downstream training using multi-task representation.
-```bash
-python train.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---model-name 'Down_SMART_Net_SEG' \
---batch-size 2 \
---epochs 1000 \
---num-workers 4 \
---pin-mem \
---training-stream 'Downstream' \
---multi-gpu-mode 'DataParallel' \
---cuda-visible-devices '2, 3' \
---gradual-unfreeze 'True' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_seg_test' \
---from-pretrained '/workspace/sunggu/1.Hemorrhage/SMART-Net/up_test/epoch_0_checkpoint.pth' \
---load-weight-type 'encoder'
-```
-**+ test**: We conducted upstream training with three multi-task including classificatiom, segmentation and reconstruction.
-```bash
-python test.py \
---data-folder-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/datasets/samples' \
---test-dataset-name 'Custom' \
---slice-wise-manner 'False' \
---model-name 'Down_SMART_Net_SEG' \
---num-workers 4 \
---pin-mem \
---training-stream 'Downstream' \
---multi-gpu-mode 'Single' \
---cuda-visible-devices '2' \
---print-freq 1 \
---output-dir '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_seg_test' \
---resume '/workspace/sunggu/1.Hemorrhage/SMART-Net/checkpoints/down_seg_test/epoch_0_checkpoint.pth'
-```
-
-
-
-## Upstream visualize
-### 1. Activation map
-```
-⏳ It's scheduled to be uploaded soon.
-```
-### 2. t-SNE
-```
-⏳ It's scheduled to be uploaded soon.
-```
-
-
-## Excuse
-For personal information security reasons of medical data in Korea, our data cannot be disclosed.
-
+## 🙏 Excuse
+We indeed welcome the opportunity to make our dataset and model publicly available, to foster collaboration and further research within the community. However, regarding the dataset, as it comprises medical data, it must receive approval from the Asan Hospital Institutional Review Board (IRB). Therefore, the dataset will be made available on a request-only basis. Please contact us by email by filling out the appropriate form.
 
 ## 📝 Citation
 If you use this code for your research, please cite our papers:
@@ -262,17 +115,7 @@ If you use this code for your research, please cite our papers:
 ```
 
 ## 🤝 Acknowledgement
-We build SMART-Net framework by referring to the released code at [qubvel/segmentation_models.pytorch](https://github.com/qubvel/segmentation_models.pytorch) and [Project-MONAI/MONAI](https://github.com/Project-MONAI/MONAI). 
-This is a patent-pending technology.
-
+We acknowledge the open-source libraries, including the [Albumentations](https://albumentations.ai/docs/).
 
 ### 🛡️ License <a name="license"></a>
-Project is distributed under [MIT License](https://github.com/babbu3682/PedXnet_Code_Factory/blob/main/LICENSE)
-=======
-# PedXnet_Code_Factory
- code factory
->>>>>>> parent of 45c5ed3... update
-=======
-# PedXnet_Code_Factory
- code factory
->>>>>>> parent of 45c5ed3... update
+Project is distributed under [MIT License](https://github.com/babbu3682/PedXnet/blob/main/LICENSE)
