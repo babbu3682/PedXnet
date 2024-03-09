@@ -15,7 +15,7 @@ It is currently incomplete. It will be still updated.
 ## Paper
 This repository provides the official implementation code of PedXnet in the following paper:<br/>
 <b>Supervised representation learning based on various levels of pediatric radiographic views for transfer learning</b><br/><br/>
-Authors: [Sunggu Kyung](https://github.com/babbu3682), Miso Jang, Seungju Park, Hee Mang Yoon, Gil-Sun Hong, Namkug Kim<br/><br/>
+Authors: [Sunggu Kyung](https://github.com/babbu3682), Miso Jang, Seungju Park, Hee Mang Yoon, Gil-Sun Hong, and Namkug Kim<br/><br/>
 [MI2RL LAB](https://www.mi2rl.co/)<br/><br/>
 (Under revision...) Nature Scientific Report<br/>
 
